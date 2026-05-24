@@ -64,7 +64,10 @@ public sealed class TicketSuggestionService
 
         var category = ticket.Category;
         if (category is SupportCategory.Other or "")
-            category = await ClassifyCategoryAsync(ticket.Question, cancellationToken) ?? SupportCategory.Other;
+        {
+            var classified = await ClassifyCategoryDetailedAsync(ticket.Question, cancellationToken);
+            category = classified?.Category ?? TryKeywordClassify(ticket.Question) ?? SupportCategory.Other;
+        }
 
         var related = await SearchKnowledgeViaMcpAsync(ticket.Question, category, cancellationToken);
         var suggestion = await GenerateSuggestionAsync(ticket.Question, related, cancellationToken);
@@ -127,8 +130,8 @@ public sealed class TicketSuggestionService
 
     public async Task<ClassificationResult?> ClassifyTicketAsync(string question, CancellationToken cancellationToken = default)
     {
-        var category = await ClassifyCategoryAsync(question, cancellationToken);
-        return category is null ? null : new ClassificationResult(category, 0.8, "LLM classification");
+        var parsed = await ClassifyCategoryDetailedAsync(question, cancellationToken);
+        return parsed;
     }
 
     private async Task<IReadOnlyList<RelatedDocument>> SearchKnowledgeViaMcpAsync(
@@ -150,14 +153,24 @@ public sealed class TicketSuggestionService
         }
     }
 
-    private async Task<string?> ClassifyCategoryAsync(string question, CancellationToken cancellationToken)
+    private async Task<ClassificationResult?> ClassifyCategoryDetailedAsync(string question, CancellationToken cancellationToken)
     {
-        if (!_openAiOptions.Enabled || _chat is null) return SupportCategory.Other;
+        var keyword = TryKeywordClassify(question);
+
+        if (!_openAiOptions.Enabled || _chat is null)
+            return keyword is null ? null : new ClassificationResult(keyword, 0.75, "Keyword fallback");
 
         var prompt = """
-            Phan loai cau hoi ho tro vao IT, HR, Finance hoac Other.
-            Chi tra ve JSON: {"category":"IT","confidence":0.9,"reason":"..."}
-            Cau hoi: 
+            Phan loai cau hoi ho tro nhan vien vao mot trong: IT, HR, Finance, Other.
+            - IT: VPN, mat khau, phan mem, may tinh, email cong ty
+            - HR: nghi phep, luong, hop dong lao dong, phuc loi
+            - Finance: reimburse, chi phi, hoa don, thanh toan
+            - Other: khong ro
+
+            Chi tra ve JSON hop le, khong markdown:
+            {"category":"HR","confidence":0.9,"reason":"..."}
+
+            Cau hoi:
             """ + question;
 
         ChatMessageContent result;
@@ -167,19 +180,88 @@ public sealed class TicketSuggestionService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Azure OpenAI classify that bai; fallback Other.");
-            return SupportCategory.Other;
+            _logger.LogWarning(ex, "Azure OpenAI classify that bai; fallback keyword.");
+            return keyword is null ? null : new ClassificationResult(keyword, 0.75, "Keyword fallback (LLM error)");
         }
+
+        var parsed = TryParseClassification(result.Content);
+        if (parsed is null)
+        {
+            _logger.LogDebug("Khong parse duoc classification JSON: {Content}", result.Content);
+            return keyword is null ? null : new ClassificationResult(keyword, 0.75, "Keyword fallback (parse error)");
+        }
+
+        if (parsed.Confidence < 0.5)
+            return keyword is null ? null : new ClassificationResult(keyword, 0.75, "Keyword fallback (low confidence)");
+
+        if (parsed.Category is SupportCategory.Other && keyword is not null)
+            return new ClassificationResult(keyword, Math.Max(parsed.Confidence, 0.75), parsed.Reason);
+
+        return parsed;
+    }
+
+    private async Task<string?> ClassifyCategoryAsync(string question, CancellationToken cancellationToken)
+    {
+        var parsed = await ClassifyCategoryDetailedAsync(question, cancellationToken);
+        return parsed?.Category ?? TryKeywordClassify(question) ?? SupportCategory.Other;
+    }
+
+    private static ClassificationResult? TryParseClassification(string? content)
+    {
+        if (string.IsNullOrWhiteSpace(content)) return null;
+
+        var json = content.Trim();
+        var match = Regex.Match(json, @"\{[\s\S]*\}");
+        if (match.Success)
+            json = match.Value;
+
         try
         {
-            var parsed = System.Text.Json.JsonSerializer.Deserialize<ClassificationResult>(result.Content ?? "{}");
-            if (parsed?.Confidence < 0.5) return SupportCategory.Other;
-            return parsed?.Category ?? SupportCategory.Other;
+            var parsed = System.Text.Json.JsonSerializer.Deserialize<ClassificationResult>(
+                json,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (parsed is null || string.IsNullOrWhiteSpace(parsed.Category)) return null;
+
+            var category = NormalizeCategory(parsed.Category);
+            if (category is null) return null;
+
+            return parsed with { Category = category };
         }
         catch
         {
-            return SupportCategory.Other;
+            return null;
         }
+    }
+
+    private static string? NormalizeCategory(string raw)
+    {
+        var trimmed = raw.Trim();
+        foreach (var cat in SupportCategory.All)
+        {
+            if (string.Equals(trimmed, cat, StringComparison.OrdinalIgnoreCase))
+                return cat;
+        }
+
+        return trimmed.ToUpperInvariant() switch
+        {
+            "IT" => SupportCategory.IT,
+            "HR" => SupportCategory.HR,
+            "FINANCE" => SupportCategory.Finance,
+            "OTHER" => SupportCategory.Other,
+            _ => null
+        };
+    }
+
+    private static string? TryKeywordClassify(string question)
+    {
+        var q = question.ToLowerInvariant();
+        if (q.Contains("vpn") || q.Contains("mat khau") || q.Contains("phan mem") || q.Contains("may tinh") || q.Contains("email cong ty"))
+            return SupportCategory.IT;
+        if (q.Contains("nghi phep") || q.Contains("luong") || q.Contains("hop dong") || q.Contains("phuc loi") || q.Contains("onboarding"))
+            return SupportCategory.HR;
+        if (q.Contains("reimburse") || q.Contains("chi phi") || q.Contains("hoa don") || q.Contains("thanh toan"))
+            return SupportCategory.Finance;
+        return null;
     }
 
     private async Task<string> GenerateSuggestionAsync(string question, IReadOnlyList<RelatedDocument> related, CancellationToken cancellationToken)

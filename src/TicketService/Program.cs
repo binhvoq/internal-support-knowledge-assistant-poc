@@ -66,7 +66,7 @@ app.MapGet("/tickets", async (string? status, string? category, TicketDbContext 
     if (!string.IsNullOrWhiteSpace(category))
         query = query.Where(t => t.Category == category);
 
-    var items = await query.OrderByDescending(t => t.CreatedAt).ToListAsync();
+    var items = (await query.ToListAsync()).OrderByDescending(t => t.CreatedAt).ToList();
     return Results.Ok(items.Select(TicketMapper.ToDto));
 });
 
@@ -104,8 +104,11 @@ app.MapPost("/tickets/{id}/resolve", async (string id, ResolveTicketRequest requ
     var entity = await db.Tickets.FindAsync(id);
     if (entity is null) return Results.NotFound();
 
+    if (string.IsNullOrWhiteSpace(request.FinalAnswer))
+        return Results.BadRequest(new { error = "finalAnswer la bat buoc khi resolve ticket." });
+
     entity.Status = TicketStatus.Resolved;
-    entity.FinalAnswer = request.FinalAnswer?.Trim() ?? entity.AiSuggestedAnswer;
+    entity.FinalAnswer = request.FinalAnswer.Trim();
     entity.UpdatedAt = DateTimeOffset.UtcNow;
     await db.SaveChangesAsync();
     await TryPublishAsync(app.Logger, publisher, SupportEventTypes.TicketResolved, new TicketResolvedPayload { TicketId = id });

@@ -136,7 +136,7 @@ app.MapPost("/documents/reindex", async (
 app.MapGet("/search", async (
     string query,
     string? category,
-    string mode,
+    string? mode,
     IOptions<AzureSearchOptions> searchOptions,
     KnowledgeSearchService search,
     EmbeddingService embeddings,
