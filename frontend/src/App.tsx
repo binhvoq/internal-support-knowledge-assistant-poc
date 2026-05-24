@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import './App.css';
 import { api, type KnowledgeDocument, type Ticket } from './api';
 
@@ -93,7 +93,13 @@ function EmployeeView() {
     <div className="card">
       <h2>Tao cau hoi ho tro</h2>
       <label>Employee ID</label>
-      <input value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} />
+      <input
+        value={employeeId}
+        onChange={(e) => {
+          setEmployeeId(e.target.value);
+          if (error) setError('');
+        }}
+      />
       <label>Category (de trong = tu dong phan loai)</label>
       <select value={category} onChange={(e) => setCategory(e.target.value)}>
         <option value="">Tu dong</option>
@@ -102,7 +108,13 @@ function EmployeeView() {
         ))}
       </select>
       <label>Question</label>
-      <textarea value={question} onChange={(e) => setQuestion(e.target.value)} />
+      <textarea
+        value={question}
+        onChange={(e) => {
+          setQuestion(e.target.value);
+          if (error) setError('');
+        }}
+      />
       {error && <p className="error">{error}</p>}
       <div className="actions">
         <button className="primary" onClick={submit}>
@@ -123,15 +135,18 @@ function QueueView({ onSelect }: { onSelect: (id: string) => void }) {
   const [status, setStatus] = useState('');
   const [category, setCategory] = useState('');
 
-  const load = async () => {
-    const data = await api.listTickets(status || undefined, category || undefined);
-    setTickets(data);
-  };
-
   useEffect(() => {
-    load();
-    const t = setInterval(load, 5000);
-    return () => clearInterval(t);
+    let cancelled = false;
+    const run = async () => {
+      const data = await api.listTickets(status || undefined, category || undefined);
+      if (!cancelled) setTickets(data);
+    };
+    run();
+    const t = setInterval(run, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
   }, [status, category]);
 
   return (
@@ -157,38 +172,53 @@ function QueueView({ onSelect }: { onSelect: (id: string) => void }) {
           </select>
         </div>
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>Employee</th>
-            <th>Category</th>
-            <th>Status</th>
-            <th>Question</th>
-            <th>AI</th>
-            <th>Created</th>
-          </tr>
-        </thead>
-        <tbody>
-          {tickets.map((t) => (
-            <tr key={t.id} style={{ cursor: 'pointer' }} onClick={() => onSelect(t.id)}>
-              <td>{t.id}</td>
-              <td>{t.employeeId}</td>
-              <td>{t.category}</td>
-              <td>{t.status}</td>
-              <td>{t.question.slice(0, 60)}</td>
-              <td>
-                {t.aiSuggestedAnswer ? (
-                  <span className="badge ai">AI Ready</span>
-                ) : (
-                  <span className="badge new">Pending</span>
-                )}
-              </td>
-              <td>{new Date(t.createdAt).toLocaleString()}</td>
+      <div className="table-scroll" aria-label="Ticket list">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Employee</th>
+              <th>Category</th>
+              <th>Status</th>
+              <th>Question</th>
+              <th>AI</th>
+              <th>Created</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {tickets.map((t) => (
+              <tr
+                key={t.id}
+                style={{ cursor: 'pointer' }}
+                onClick={() => onSelect(t.id)}
+                role="button"
+                tabIndex={0}
+                aria-label={`Open ticket ${t.id}`}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onSelect(t.id);
+                  }
+                }}
+              >
+                <td>{t.id}</td>
+                <td>{t.employeeId}</td>
+                <td>{t.category}</td>
+                <td>{t.status}</td>
+                <td>{t.question.slice(0, 60)}</td>
+                <td>
+                  {t.aiSuggestedAnswer ? (
+                    <span className="badge ai">AI Ready</span>
+                  ) : (
+                    <span className="badge new">Pending</span>
+                  )}
+                </td>
+                <td>{new Date(t.createdAt).toLocaleString()}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -197,36 +227,71 @@ function DetailView({ ticketId, onBack }: { ticketId: string; onBack: () => void
   const [ticket, setTicket] = useState<Ticket | null>(null);
   const [finalAnswer, setFinalAnswer] = useState('');
   const [error, setError] = useState('');
+  const finalAnswerRef = useRef<HTMLTextAreaElement | null>(null);
+  const finalAnswerDirtyRef = useRef(false);
 
-  const load = async () => {
+  const refreshTicket = async (syncFinalAnswer = false) => {
     const t = await api.getTicket(ticketId);
     setTicket(t);
-    setFinalAnswer(t.finalAnswer ?? t.aiSuggestedAnswer ?? '');
+    if (syncFinalAnswer) {
+      setFinalAnswer(t.finalAnswer ?? t.aiSuggestedAnswer ?? '');
+      finalAnswerDirtyRef.current = false;
+    }
   };
 
   useEffect(() => {
-    load();
-    const t = setInterval(load, 4000);
-    return () => clearInterval(t);
+    let cancelled = false;
+    const run = async () => {
+      const t = await api.getTicket(ticketId);
+      if (cancelled) return;
+      setTicket(t);
+      setFinalAnswer(t.finalAnswer ?? t.aiSuggestedAnswer ?? '');
+      finalAnswerDirtyRef.current = false;
+    };
+    run();
+    const t = setInterval(() => {
+      void api.getTicket(ticketId).then((data) => {
+        if (cancelled) return;
+        setTicket(data);
+        if (!finalAnswerDirtyRef.current) {
+          setFinalAnswer(data.finalAnswer ?? data.aiSuggestedAnswer ?? '');
+        }
+      });
+    }, 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
   }, [ticketId]);
 
   const resolve = async () => {
+    setError('');
+    const answer = finalAnswerRef.current?.value ?? finalAnswer;
+    if (!answer.trim()) {
+      setError('Final answer khong duoc de trong khi resolve.');
+      return;
+    }
     try {
-      await api.resolveTicket(ticketId, finalAnswer);
-      await load();
+      const updated = await api.resolveTicket(ticketId, answer);
+      setTicket(updated);
+      setFinalAnswer(updated.finalAnswer ?? answer);
+      finalAnswerDirtyRef.current = false;
     } catch (e) {
       setError((e as Error).message);
     }
   };
 
   const saveAnswer = async () => {
-    await api.patchTicket(ticketId, { aiSuggestedAnswer: finalAnswer });
-    await load();
+    const answer = finalAnswerRef.current?.value ?? finalAnswer;
+    const updated = await api.patchTicket(ticketId, { finalAnswer: answer });
+    setTicket(updated);
+    setFinalAnswer(updated.finalAnswer ?? answer);
+    finalAnswerDirtyRef.current = false;
   };
 
   const reopen = async () => {
     await api.reopenTicket(ticketId);
-    await load();
+    await refreshTicket(true);
   };
 
   if (!ticket) return <div className="card">Dang tai...</div>;
@@ -262,7 +327,14 @@ function DetailView({ ticketId, onBack }: { ticketId: string; onBack: () => void
         )}
       </ul>
       <label>Final / Edited Answer</label>
-      <textarea value={finalAnswer} onChange={(e) => setFinalAnswer(e.target.value)} />
+      <textarea
+        ref={finalAnswerRef}
+        value={finalAnswer}
+        onChange={(e) => {
+          finalAnswerDirtyRef.current = true;
+          setFinalAnswer(e.target.value);
+        }}
+      />
       {error && <p className="error">{error}</p>}
       <div className="actions">
         <button className="secondary" onClick={saveAnswer}>
@@ -287,6 +359,7 @@ function KnowledgeView() {
   const [sourceUrl, setSourceUrl] = useState('');
   const [reindexStatus, setReindexStatus] = useState('Idle');
   const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
 
   const load = async () => {
     setDocs(await api.listDocuments());
@@ -295,28 +368,51 @@ function KnowledgeView() {
   };
 
   useEffect(() => {
-    load();
+    void Promise.all([api.listDocuments(), api.reindexStatus()]).then(([documents, st]) => {
+      setDocs(documents);
+      setReindexStatus(st.status);
+    });
   }, []);
 
   const addDoc = async () => {
-    await api.createDocument({
-      title,
-      category,
-      content,
-      sourceUrl: sourceUrl.trim() || undefined,
-    });
-    setTitle('');
-    setContent('');
-    setSourceUrl('');
-    setMessage('Da them tai lieu.');
-    await load();
+    setError('');
+    setMessage('');
+    if (!title.trim()) {
+      setError('Title khong duoc de trong.');
+      return;
+    }
+    if (!content.trim()) {
+      setError('Content khong duoc de trong.');
+      return;
+    }
+    try {
+      await api.createDocument({
+        title: title.trim(),
+        category,
+        content: content.trim(),
+        sourceUrl: sourceUrl.trim() || undefined,
+      });
+      setTitle('');
+      setContent('');
+      setSourceUrl('');
+      setMessage('Da them tai lieu.');
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
   };
 
   const reindex = async () => {
+    setError('');
     setMessage('Dang re-index...');
-    const result = await api.reindex();
-    setMessage(`Re-index: ${result.status}, ${result.documentCount} documents.`);
-    await load();
+    try {
+      const result = await api.reindex();
+      setMessage(`Re-index: ${result.status}, ${result.documentCount} documents.`);
+      await load();
+    } catch (e) {
+      setMessage('');
+      setError((e as Error).message);
+    }
   };
 
   return (
@@ -326,8 +422,15 @@ function KnowledgeView() {
         Re-index status: <strong>{reindexStatus}</strong>
       </p>
       {message && <p className="success">{message}</p>}
+      {error && <p className="error">{error}</p>}
       <label>Title</label>
-      <input value={title} onChange={(e) => setTitle(e.target.value)} />
+      <input
+        value={title}
+        onChange={(e) => {
+          setTitle(e.target.value);
+          if (error) setError('');
+        }}
+      />
       <label>Category</label>
       <select value={category} onChange={(e) => setCategory(e.target.value)}>
         {categories.map((c) => (
@@ -335,7 +438,13 @@ function KnowledgeView() {
         ))}
       </select>
       <label>Content</label>
-      <textarea value={content} onChange={(e) => setContent(e.target.value)} />
+      <textarea
+        value={content}
+        onChange={(e) => {
+          setContent(e.target.value);
+          if (error) setError('');
+        }}
+      />
       <label>Source URL (tuy chon)</label>
       <input
         value={sourceUrl}
@@ -404,7 +513,9 @@ function ChatView() {
         </button>
       </div>
       <h3>Reply</h3>
-      <div className="chat-box">{reply || '(chua co phan hoi)'}</div>
+      <div className="chat-box" role="status" aria-live="polite">
+        {reply || '(chua co phan hoi)'}
+      </div>
     </div>
   );
 }
