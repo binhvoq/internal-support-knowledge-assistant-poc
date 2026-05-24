@@ -1,0 +1,152 @@
+:root {
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  line-height: 1.5;
+  color: #1a1a2e;
+  background: #f4f6fb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+nav {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.5rem;
+}
+
+nav button {
+  border: 1px solid #c5cee0;
+  background: #fff;
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+nav button.active {
+  background: #3d5afe;
+  color: #fff;
+  border-color: #3d5afe;
+}
+
+.card {
+  background: #fff;
+  border-radius: 12px;
+  padding: 1.25rem;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+  margin-bottom: 1rem;
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  margin: 0.75rem 0 0.25rem;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid #d0d7e6;
+  border-radius: 8px;
+  font: inherit;
+}
+
+textarea {
+  min-height: 100px;
+}
+
+.actions {
+  margin-top: 1rem;
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+button.primary {
+  background: #3d5afe;
+  color: #fff;
+  border: none;
+  padding: 0.6rem 1.2rem;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+button.secondary {
+  background: #eef1f8;
+  border: 1px solid #c5cee0;
+  padding: 0.6rem 1.2rem;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.6rem;
+  border-bottom: 1px solid #e8ecf4;
+  font-size: 0.92rem;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.badge.ai {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.badge.new {
+  background: #e3f2fd;
+  color: #1565c0;
+}
+
+.error {
+  color: #c62828;
+  margin-top: 0.5rem;
+}
+
+.success {
+  color: #2e7d32;
+  margin-top: 0.5rem;
+}
+
+.related {
+  list-style: none;
+  padding: 0;
+}
+
+.related li {
+  padding: 0.35rem 0;
+  border-bottom: 1px dashed #e0e0e0;
+}
+
+.chat-box {
+  background: #f8f9fc;
+  border-radius: 8px;
+  padding: 1rem;
+  min-height: 120px;
+  white-space: pre-wrap;
+}

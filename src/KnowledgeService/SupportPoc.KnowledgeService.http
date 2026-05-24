@@ -1,0 +1,6 @@
+@SupportPoc.KnowledgeService_HostAddress = http://localhost:5119
+
+GET {{SupportPoc.KnowledgeService_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

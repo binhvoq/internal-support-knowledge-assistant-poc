@@ -1,0 +1,6 @@
+@SupportPoc.AiOrchestrator_HostAddress = http://localhost:5011
+
+GET {{SupportPoc.AiOrchestrator_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

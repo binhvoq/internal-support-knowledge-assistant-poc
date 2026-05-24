@@ -1,0 +1,18 @@
+<Solution>
+  <Folder Name="/src/" />
+  <Folder Name="/src/AiOrchestrator/">
+    <Project Path="src/AiOrchestrator/SupportPoc.AiOrchestrator.csproj" />
+  </Folder>
+  <Folder Name="/src/KnowledgeService/">
+    <Project Path="src/KnowledgeService/SupportPoc.KnowledgeService.csproj" />
+  </Folder>
+  <Folder Name="/src/McpToolServer/">
+    <Project Path="src/McpToolServer/SupportPoc.McpToolServer.csproj" />
+  </Folder>
+  <Folder Name="/src/Shared/">
+    <Project Path="src/Shared/SupportPoc.Shared.csproj" />
+  </Folder>
+  <Folder Name="/src/TicketService/">
+    <Project Path="src/TicketService/SupportPoc.TicketService.csproj" />
+  </Folder>
+</Solution>
