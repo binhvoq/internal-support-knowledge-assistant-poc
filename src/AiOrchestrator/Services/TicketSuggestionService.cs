@@ -7,7 +7,6 @@ using Microsoft.SemanticKernel.Connectors.AzureOpenAI;
 using SupportPoc.AiOrchestrator.Clients;
 using SupportPoc.AiOrchestrator.Mcp;
 using SupportPoc.AiOrchestrator.Options;
-using SupportPoc.AiOrchestrator.Plugins;
 using SupportPoc.Shared.Events;
 using SupportPoc.Shared.Messaging;
 using SupportPoc.Shared.Models;
@@ -18,6 +17,7 @@ public sealed class TicketSuggestionService
 {
     private readonly TicketApiClient _tickets;
     private readonly McpToolGateway _mcp;
+    private readonly McpDynamicPluginLoader _mcpLoader;
     private readonly ISupportEventPublisher _publisher;
     private readonly Kernel _kernel;
     private readonly IChatCompletionService? _chat;
@@ -27,6 +27,7 @@ public sealed class TicketSuggestionService
     public TicketSuggestionService(
         TicketApiClient tickets,
         McpToolGateway mcp,
+        McpDynamicPluginLoader mcpLoader,
         ISupportEventPublisher publisher,
         Kernel kernel,
         IOptions<AzureOpenAIOptions> openAiOptions,
@@ -34,13 +35,12 @@ public sealed class TicketSuggestionService
     {
         _tickets = tickets;
         _mcp = mcp;
+        _mcpLoader = mcpLoader;
         _publisher = publisher;
         _kernel = kernel;
         _openAiOptions = openAiOptions.Value;
         _logger = logger;
         _chat = _openAiOptions.Enabled ? kernel.GetRequiredService<IChatCompletionService>() : null;
-
-        _kernel.Plugins.AddFromObject(new McpKernelPlugin(mcp), "Mcp");
     }
 
     public async Task ProcessTicketCreatedAsync(string ticketId, CancellationToken cancellationToken = default)
@@ -95,18 +95,20 @@ public sealed class TicketSuggestionService
         if (!_openAiOptions.Enabled || _chat is null)
             return await OfflineChatAsync(message, cancellationToken);
 
+        var catalog = await _mcpLoader.LoadCatalogAsync(cancellationToken);
+        await _mcpLoader.RegisterWithKernelAsync(_kernel, cancellationToken);
         var settings = new AzureOpenAIPromptExecutionSettings
         {
             FunctionChoiceBehavior = FunctionChoiceBehavior.Auto()
         };
 
         var history = new ChatHistory();
-        history.AddSystemMessage("""
+        history.AddSystemMessage($"""
             Ban la tro ly ho tro noi bo. Chi tra loi dua tren tai lieu tim duoc hoac ket qua MCP tool.
             Neu khong du thong tin, noi ro can support agent xu ly. Khong tu bia chinh sach.
-            Khi user muon tao ticket, goi create_ticket (can employeeId va question).
-            Khi user hoi trang thai ticket, goi get_ticket_status. Khi can tim tai lieu, goi search_policy_documents.
-            Khi resolve ticket, goi update_ticket_status voi status Resolved va finalAnswer.
+            Cac MCP tool hien co (tu tools/list):
+            {catalog.DescribeForPrompt()}
+            Hay chon tool phu hop theo ten va schema tu server.
             """);
         history.AddUserMessage(message);
 
@@ -139,11 +141,13 @@ public sealed class TicketSuggestionService
     {
         try
         {
+            var catalog = await _mcpLoader.LoadCatalogAsync(cancellationToken);
+            var toolName = catalog.Require("search_knowledge");
             var args = new Dictionary<string, object?> { ["query"] = query };
             if (!string.IsNullOrWhiteSpace(category) && category != SupportCategory.Other)
                 args["category"] = category;
 
-            var json = await _mcp.CallToolAsync("search_knowledge", args, cancellationToken);
+            var json = await _mcp.CallToolAsync(toolName, args, cancellationToken);
             return McpKnowledgeParser.ParseSearchResults(json);
         }
         catch (Exception ex)
@@ -318,7 +322,9 @@ public sealed class TicketSuggestionService
         var ticketId = Regex.Match(message, @"TCK-\d+", RegexOptions.IgnoreCase).Value.ToUpperInvariant();
         if (!string.IsNullOrWhiteSpace(ticketId))
         {
-            var raw = await _mcp.CallToolAsync("get_ticket", new Dictionary<string, object?> { ["ticketId"] = ticketId }, cancellationToken);
+            var catalog = await _mcpLoader.LoadCatalogAsync(cancellationToken);
+            var toolName = catalog.Require("get_ticket");
+            var raw = await _mcp.CallToolAsync(toolName, new Dictionary<string, object?> { ["ticketId"] = ticketId }, cancellationToken);
             try
             {
                 using var doc = System.Text.Json.JsonDocument.Parse(raw);

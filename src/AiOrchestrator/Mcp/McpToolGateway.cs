@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
@@ -9,12 +10,22 @@ namespace SupportPoc.AiOrchestrator.Mcp;
 public sealed class McpToolGateway : IAsyncDisposable
 {
     private readonly ServiceEndpointsOptions _endpoints;
+    private readonly ILogger<McpToolGateway> _logger;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private McpClient? _client;
 
-    public McpToolGateway(IOptions<ServiceEndpointsOptions> endpoints)
+    public McpToolGateway(IOptions<ServiceEndpointsOptions> endpoints, ILogger<McpToolGateway> logger)
     {
         _endpoints = endpoints.Value;
+        _logger = logger;
+    }
+
+    public async Task<IReadOnlyList<McpClientTool>> ListToolsAsync(CancellationToken cancellationToken = default)
+    {
+        var client = await GetClientAsync(cancellationToken);
+        var tools = await client.ListToolsAsync(cancellationToken: cancellationToken);
+        _logger.LogDebug("tools/list tra ve {Count} tool(s).", tools.Count);
+        return tools.ToList();
     }
 
     public async Task<string> CallToolAsync(

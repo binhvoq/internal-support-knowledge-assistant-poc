@@ -26,6 +26,7 @@ else
 }
 
 builder.Services.AddSingleton<McpToolGateway>();
+builder.Services.AddSingleton<McpDynamicPluginLoader>();
 builder.Services.AddSingleton<TicketSuggestionService>();
 builder.Services.AddHttpClient<TicketApiClient>((sp, client) =>
 {
@@ -36,9 +37,20 @@ builder.Services.AddCors(options =>
     options.AddDefaultPolicy(p => p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
 
 var app = builder.Build();
+
 app.UseCors();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "ai-orchestrator" }));
+
+app.MapGet("/mcp/tools", async (McpDynamicPluginLoader loader, CancellationToken ct) =>
+{
+    var catalog = await loader.LoadCatalogAsync(ct);
+    return Results.Ok(new
+    {
+        count = catalog.Tools.Count,
+        tools = catalog.Tools.Select(t => new { name = t.Name, description = t.Description })
+    });
+});
 
 app.MapPost("/ai/suggest-answer", async (SuggestAnswerRequest request, TicketSuggestionService service, CancellationToken ct) =>
 {

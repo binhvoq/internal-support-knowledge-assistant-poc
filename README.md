@@ -53,6 +53,18 @@ bash scripts/sync-config.sh
 
 Xoa toan bo: `az group delete -n rg-support-poc --yes --no-wait`
 
+### Bat / tat tai nguyen (tiet kiem chi phi)
+
+Azure Search (Basic) va Service Bus (Standard) **khong co che do tam dung** — phai xoa moi het phi co dinh (~\$85/thang). OpenAI tinh theo token khi goi API.
+
+```bash
+# Tat het tai nguyen ton phi (luu trang thai -> config/azure.resources.state.json)
+bash scripts/azure-resources-stop.sh
+
+# Bat lai (provision moi + dong bo appsettings)
+bash scripts/azure-resources-start.sh
+```
+
 Khoi dong lai 4 backend: `bash scripts/restart-services.sh`
 
 Smoke test (4 services dang chay): `bash scripts/smoke-test.sh`

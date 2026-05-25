@@ -6,10 +6,18 @@ if command -v curl.exe >/dev/null 2>&1; then
   CURL=curl.exe
 fi
 
+PYTHON=python3; command -v python3 >/dev/null 2>&1 || PYTHON=python
+
 echo "Health checks..."
 for port in 5001 5002 5003 5004; do
   "$CURL" -sf "http://localhost:$port/health" >/dev/null || { echo "Service :$port khong chay."; exit 1; }
 done
+
+echo "MCP tools/list (qua AiOrchestrator)..."
+TOOLS=$("$CURL" -sf "http://localhost:5003/mcp/tools")
+TOOL_COUNT=$(echo "$TOOLS" | "$PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d['count'])")
+echo "  tools=$TOOL_COUNT"
+[[ "$TOOL_COUNT" -ge 5 ]] || { echo "MCP tools/list thieu tool (can >= 5)."; exit 1; }
 
 echo "Re-index..."
 "$CURL" -sf -X POST http://localhost:5002/documents/reindex | tee /tmp/reindex.json

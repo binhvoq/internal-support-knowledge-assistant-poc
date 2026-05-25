@@ -9,6 +9,7 @@ dist/
 .logs/
 .env.local
 config/azure.local.json
+config/azure.resources.state.json
 src/**/appsettings.Development.json
 .DS_Store
 .terraform/
