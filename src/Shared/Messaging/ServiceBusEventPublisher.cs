@@ -33,6 +33,7 @@ public sealed class ServiceBusEventPublisher : ISupportEventPublisher, IAsyncDis
     {
         var envelope = new SupportEventEnvelope
         {
+            EventId = Guid.NewGuid().ToString("N"),
             EventType = eventType,
             OccurredAt = DateTimeOffset.UtcNow,
             Payload = payload!
@@ -46,11 +47,12 @@ public sealed class ServiceBusEventPublisher : ISupportEventPublisher, IAsyncDis
 
         var message = new ServiceBusMessage(JsonSerializer.Serialize(envelope, JsonOptions))
         {
+            MessageId = envelope.EventId,
             Subject = eventType,
             ContentType = "application/json"
         };
         await _sender.SendMessageAsync(message, cancellationToken);
-        _logger.LogInformation("Published {EventType}", eventType);
+        _logger.LogInformation("Published {EventType} EventId={EventId}", eventType, envelope.EventId);
     }
 
     public async ValueTask DisposeAsync()

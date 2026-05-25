@@ -2,6 +2,7 @@ namespace SupportPoc.Shared.Events;
 
 public sealed class SupportEventEnvelope
 {
+    public required string EventId { get; init; }
     public required string EventType { get; init; }
     public required DateTimeOffset OccurredAt { get; init; }
     public required object Payload { get; init; }

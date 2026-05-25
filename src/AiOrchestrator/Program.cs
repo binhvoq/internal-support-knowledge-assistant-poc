@@ -1,5 +1,7 @@
 using Microsoft.SemanticKernel;
+using Microsoft.EntityFrameworkCore;
 using SupportPoc.AiOrchestrator.Clients;
+using SupportPoc.AiOrchestrator.Data;
 using SupportPoc.AiOrchestrator.Mcp;
 using SupportPoc.AiOrchestrator.Options;
 using SupportPoc.AiOrchestrator.Services;
@@ -13,6 +15,10 @@ builder.Services.Configure<AzureOpenAIOptions>(builder.Configuration.GetSection(
 builder.Services.Configure<ServiceEndpointsOptions>(builder.Configuration.GetSection(ServiceEndpointsOptions.SectionName));
 builder.Services.AddSingleton<ISupportEventPublisher, ServiceBusEventPublisher>();
 builder.Services.AddHostedService<TicketCreatedWorker>();
+builder.Services.AddDbContext<OrchestratorDbContext>(options =>
+    options.UseSqlite(builder.Configuration.GetConnectionString("Orchestrator") ?? "Data Source=orchestrator.db"));
+builder.Services.AddScoped<InboxService>();
+builder.Services.AddScoped<SagaLogService>();
 
 var openAi = builder.Configuration.GetSection(AzureOpenAIOptions.SectionName).Get<AzureOpenAIOptions>() ?? new AzureOpenAIOptions();
 if (openAi.Enabled)
@@ -27,7 +33,7 @@ else
 
 builder.Services.AddSingleton<McpToolGateway>();
 builder.Services.AddSingleton<McpDynamicPluginLoader>();
-builder.Services.AddSingleton<TicketSuggestionService>();
+builder.Services.AddScoped<TicketSuggestionService>();
 builder.Services.AddHttpClient<TicketApiClient>((sp, client) =>
 {
     var endpoints = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ServiceEndpointsOptions>>().Value;
@@ -40,6 +46,35 @@ var app = builder.Build();
 
 app.UseCors();
 
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<OrchestratorDbContext>();
+    await db.Database.EnsureCreatedAsync();
+    await db.Database.ExecuteSqlRawAsync("""
+        CREATE TABLE IF NOT EXISTS InboxMessages (
+            EventId TEXT NOT NULL,
+            Consumer TEXT NOT NULL,
+            Status TEXT NOT NULL,
+            TicketId TEXT NULL,
+            Error TEXT NULL,
+            ReceivedAt TEXT NOT NULL,
+            ProcessedAt TEXT NULL,
+            CONSTRAINT PK_InboxMessages PRIMARY KEY (Consumer, EventId)
+        );
+        """);
+    await db.Database.ExecuteSqlRawAsync("""
+        CREATE TABLE IF NOT EXISTS SagaLogEntries (
+            Id TEXT NOT NULL CONSTRAINT PK_SagaLogEntries PRIMARY KEY,
+            EventId TEXT NOT NULL,
+            TicketId TEXT NOT NULL,
+            Step TEXT NOT NULL,
+            Status TEXT NOT NULL,
+            Detail TEXT NULL,
+            CreatedAt TEXT NOT NULL
+        );
+        """);
+}
+
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "ai-orchestrator" }));
 
 app.MapGet("/mcp/tools", async (McpDynamicPluginLoader loader, CancellationToken ct) =>
@@ -50,6 +85,31 @@ app.MapGet("/mcp/tools", async (McpDynamicPluginLoader loader, CancellationToken
         count = catalog.Tools.Count,
         tools = catalog.Tools.Select(t => new { name = t.Name, description = t.Description })
     });
+});
+
+app.MapGet("/debug/inbox", async (OrchestratorDbContext db) =>
+{
+    var items = (await db.InboxMessages
+        .ToListAsync())
+        .OrderByDescending(x => x.ReceivedAt)
+        .Take(50)
+        .Select(x => new { x.Consumer, x.EventId, x.TicketId, x.Status, x.ReceivedAt, x.ProcessedAt, x.Error })
+        .ToList();
+    return Results.Ok(items);
+});
+
+app.MapGet("/debug/saga", async (string? ticketId, OrchestratorDbContext db) =>
+{
+    var query = db.SagaLogEntries.AsQueryable();
+    if (!string.IsNullOrWhiteSpace(ticketId))
+        query = query.Where(x => x.TicketId == ticketId);
+    var items = (await query
+        .ToListAsync())
+        .OrderByDescending(x => x.CreatedAt)
+        .Take(100)
+        .Select(x => new { x.EventId, x.TicketId, x.Step, x.Status, x.Detail, x.CreatedAt })
+        .ToList();
+    return Results.Ok(items);
 });
 
 app.MapPost("/ai/suggest-answer", async (SuggestAnswerRequest request, TicketSuggestionService service, CancellationToken ct) =>
@@ -78,7 +138,7 @@ app.MapPost("/ai/classify-ticket", async (ClassifyRequest request, TicketSuggest
 
 app.MapPost("/internal/ticket-created", async (TicketCreatedInternalRequest request, TicketSuggestionService service, CancellationToken ct) =>
 {
-    await service.ProcessTicketCreatedAsync(request.TicketId, ct);
+    await service.ProcessTicketCreatedAsync(request.TicketId, request.EventId, ct);
     return Results.Ok(new { status = "processed", ticketId = request.TicketId });
 });
 
@@ -87,4 +147,4 @@ app.Run();
 public sealed record SuggestAnswerRequest(string Question, string? Category);
 public sealed record ChatRequest(string Message);
 public sealed record ClassifyRequest(string Question);
-public sealed record TicketCreatedInternalRequest(string TicketId);
+public sealed record TicketCreatedInternalRequest(string TicketId, string? EventId);

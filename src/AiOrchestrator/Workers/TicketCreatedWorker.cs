@@ -77,7 +77,10 @@ public sealed class TicketCreatedWorker : BackgroundService
 
             using var scope = _services.CreateScope();
             var suggestionService = scope.ServiceProvider.GetRequiredService<TicketSuggestionService>();
-            await suggestionService.ProcessTicketCreatedAsync(payload.TicketId, args.CancellationToken);
+            await suggestionService.ProcessTicketCreatedAsync(
+                payload.TicketId,
+                string.IsNullOrWhiteSpace(envelope.EventId) ? args.Message.MessageId : envelope.EventId,
+                args.CancellationToken);
             await args.CompleteMessageAsync(args.Message);
         }
         catch (Exception ex)

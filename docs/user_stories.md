@@ -8,6 +8,8 @@ Pham vi van la mini PoC. Khong yeu cau san pham hoan chinh, nhung moi story can 
 
 Kien truc tong the di theo huong Microservices, trong do Ticket Service, Knowledge Service, AI Orchestrator va MCP Tool Server co ranh gioi rieng.
 
+Tai lieu nay dung `technical_learn.md` nhu checklist ky thuat. File checklist do khong phai business spec va khong can chinh sua khi cap nhat story.
+
 ## 2. Actors
 
 ### Employee
@@ -74,13 +76,15 @@ Response:
 - Neu question trong, UI hien validation error.
 - Ticket moi co status mac dinh la `New`.
 - Ticket Service luu ticket vao database.
-- Ticket Service publish event `TicketCreated`.
+- Ticket Service ghi outbox event `TicketCreated`.
+- Neu frontend retry cung `Idempotency-Key`, Ticket Service khong tao ticket trung.
 
 #### Technical notes
 
 - React dung form state va call API.
 - Ticket Service la mot microservice rieng.
-- Event-Driven Architecture: publish `TicketCreated` vao Azure Service Bus hoac Event Grid.
+- Event-Driven Architecture: Outbox worker publish `TicketCreated` vao Azure Service Bus hoac Event Grid.
+- Idempotency key co the nam trong header `Idempotency-Key` hoac request body.
 - GitHub Actions can build/test Ticket Service.
 
 ## 4. Epic 2: Support Agent quan ly ticket
@@ -176,12 +180,14 @@ Request:
 
 - Ticket status chuyen thanh `Resolved`.
 - Final answer duoc luu vao ticket.
-- Ticket Service publish event `TicketResolved`.
+- Ticket Service ghi outbox event `TicketResolved`.
 - Ticket da resolve van xem lai duoc trong danh sach.
+- Neu agent bam `Resolve` hai lan voi cung idempotency key, response tra lai ket qua cu va khong publish event trung.
 
 #### Technical notes
 
 - Dung event `TicketResolved` de minh hoa Event-Driven Architecture.
+- Dung Idempotency va Outbox Pattern de tranh double resolve va mat event.
 - Co unit test cho transition status.
 
 ## 5. Epic 3: Knowledge Admin quan ly tai lieu noi bo
@@ -217,7 +223,7 @@ Request:
 
 - Admin them duoc document moi.
 - Document duoc luu vao database hoac storage.
-- Knowledge Service publish event `KnowledgeDocumentUploaded`.
+- Knowledge Service ghi outbox event `KnowledgeDocumentUploaded`.
 - Document co the duoc dua vao Azure AI Search index.
 
 #### Technical notes
@@ -225,6 +231,7 @@ Request:
 - Knowledge Service la microservice rieng.
 - Co the luu raw document vao Azure Storage Account.
 - Metadata luu o Cosmos DB, Azure SQL, hoac database local cho PoC.
+- Outbox Pattern giup dam bao upload document va event upload khong bi lech nhau.
 
 ### Story 3.2: Re-index knowledge base
 
@@ -249,13 +256,15 @@ As a Knowledge Admin, I want to re-index documents, so that the search index is 
 - Knowledge Service tao embedding cho documents.
 - Knowledge Service cap nhat Azure AI Search index.
 - Sau khi re-index, search theo keyword va Vector search tra ve document lien quan.
-- Knowledge Service publish event `KnowledgeIndexUpdated`.
+- Knowledge Service ghi outbox event `KnowledgeIndexUpdated`.
+- Neu admin bam re-index nhieu lan lien tiep, he thong dung idempotency/job lock de khong tao nhieu job trung.
 
 #### Technical notes
 
 - Dung Azure OpenAI embedding model de tao vector.
 - Dung Azure AI Search index co field `embedding`.
 - Nen co seed data de demo nhanh.
+- Re-index la use case nho de luyen Idempotency cho lenh chay lau.
 
 ## 6. Epic 4: AI sinh cau tra loi goi y
 
@@ -270,15 +279,18 @@ As a Support Agent, I want the system to automatically generate an AI suggested 
 #### Processing
 
 1. AI Orchestrator nhan event.
-2. AI Orchestrator lay ticket detail.
-3. AI Orchestrator goi Azure AI Search:
+2. AI Orchestrator ghi Inbox record theo `eventId`.
+3. AI Orchestrator lay ticket detail.
+4. AI Orchestrator chuyen ticket sang `Analyzing`.
+5. AI Orchestrator goi Azure AI Search:
    - Keyword search.
    - Vector search.
    - Hybrid search neu co.
-4. AI Orchestrator dung Semantic Kernel de tao prompt.
-5. AI Orchestrator goi Azure OpenAI LLM.
-6. AI Orchestrator luu `aiSuggestedAnswer` va `relatedDocumentIds` vao ticket.
-7. AI Orchestrator publish event `AISuggestionGenerated`.
+6. AI Orchestrator dung Semantic Kernel de tao prompt.
+7. AI Orchestrator goi Azure OpenAI LLM.
+8. AI Orchestrator luu `aiSuggestedAnswer` va `relatedDocumentIds` vao ticket.
+9. AI Orchestrator publish event `AISuggestionGenerated`.
+10. AI Orchestrator mark Inbox record la `Processed`.
 
 #### Acceptance criteria
 
@@ -287,10 +299,13 @@ As a Support Agent, I want the system to automatically generate an AI suggested 
 - Sau khi AI xu ly xong, ticket co status `Suggested`.
 - Cau tra loi AI co dua tren document tim duoc.
 - Neu khong tim thay document phu hop, AI phai noi ro khong du thong tin.
+- Neu Service Bus redeliver cung event, Inbox Pattern dam bao AI khong tao suggestion trung.
+- Neu mot buoc trong Saga loi, ticket co trang thai/debug reason de agent xu ly tay.
 
 #### Technical notes
 
 - Day la luong chinh de dung LLM, Azure OpenAI, Azure AI Search, Vector search va Semantic Kernel.
+- Day cung la luong chinh de luyen Saga Pattern Orchestration va Inbox Pattern.
 - Can log prompt input/output o muc an toan cho debug PoC.
 
 ### Story 4.2: Phan loai ticket bang LLM
@@ -477,9 +492,105 @@ Output:
 
 - Tool nay giup luyen MCP (Model Context Protocol) va Azure AI Search.
 
-## 9. Epic 7: Infrastructure va DevOps
+## 9. Epic 7: Reliability patterns cho event flow
 
-### Story 7.1: Khai bao Azure infrastructure bang Terraform
+### Story 7.1: Outbox cho Ticket Service
+
+As a Developer, I want Ticket Service to write events to an outbox, so that ticket data and business events stay consistent.
+
+#### Scope
+
+- Ap dung cho `TicketCreated`, `TicketUpdated`, `TicketResolved`.
+- Outbox worker publish event len Azure Service Bus.
+- Worker mark record thanh `Published` khi publish thanh cong.
+
+#### Acceptance criteria
+
+- Tao ticket ghi ticket va outbox record trong cung transaction.
+- Resolve ticket ghi status moi va outbox record trong cung transaction.
+- Neu Service Bus tam thoi loi, outbox record van con `Pending` de retry.
+- Publish thanh cong thi outbox record co `publishedAt`.
+
+#### Technical notes
+
+- Co the dung SQLite table `OutboxMessages` cho PoC local.
+- Azure target co the map sang Azure SQL/Cosmos DB.
+- Pattern nay bo sung cho Event-Driven Architecture.
+
+### Story 7.2: Inbox cho AI Orchestrator
+
+As a Developer, I want AI Orchestrator to store consumed event IDs, so that redelivered messages do not trigger duplicate AI work.
+
+#### Scope
+
+- Ap dung cho event `TicketCreated`.
+- Consumer key gom `eventId` va `consumerName`.
+- Status toi thieu: `Received`, `Processing`, `Processed`, `Failed`.
+
+#### Acceptance criteria
+
+- Lan dau nhan event thi tao Inbox record.
+- Neu nhan lai event da `Processed`, service skip va ack message.
+- Neu xu ly loi, Inbox record luu error reason de debug.
+- Smoke test co the tao/retry message ma ticket van chi co mot AI suggestion hop le.
+
+#### Technical notes
+
+- Inbox Pattern nam trong AI Orchestrator.
+- Nen log ro `eventId`, `ticketId`, `consumerName`.
+
+### Story 7.3: Idempotency cho command API
+
+As a Developer, I want command APIs to be idempotent, so that retry from UI or network failure does not create duplicate business actions.
+
+#### APIs
+
+- `POST /tickets`
+- `POST /tickets/{id}/resolve`
+- `POST /documents/reindex`
+
+#### Acceptance criteria
+
+- Cung `Idempotency-Key` va cung payload tra ve cung ket qua.
+- Cung key nhung payload khac nhau bi reject voi loi ro rang.
+- Tao ticket bi retry khong tao ticket thu hai.
+- Resolve bi retry khong publish `TicketResolved` thu hai.
+- Re-index bi retry khong tao nhieu job song song.
+
+#### Technical notes
+
+- Idempotency store co the nam trong database cua tung service.
+- PoC chi can TTL don gian hoac luu vinh vien trong local database.
+
+### Story 7.4: Saga orchestration cho AI suggestion
+
+As a Support Agent, I want ticket analysis to move through clear states, so that failures are visible and can be handled manually.
+
+#### Saga steps
+
+1. Receive `TicketCreated`.
+2. Mark ticket `Analyzing`.
+3. Classify category if needed.
+4. Search related knowledge.
+5. Generate AI suggestion.
+6. Save suggestion and related documents.
+7. Mark ticket `Suggested`.
+
+#### Acceptance criteria
+
+- Moi step co log voi `ticketId` va `eventId`.
+- Neu search/LLM loi, ticket khong bien mat khoi queue.
+- Ticket loi co status `NeedsManualReview` hoac error reason de agent xem.
+- Retry cung event khong tao duplicate work nho Inbox va idempotent update.
+
+#### Technical notes
+
+- Saga Pattern Orchestration nam trong AI Orchestrator, khong can workflow engine rieng.
+- Day la Saga mini de luyen tu duy orchestration qua nhieu service.
+
+## 10. Epic 8: Infrastructure va DevOps
+
+### Story 8.1: Khai bao Azure infrastructure bang Terraform
 
 As a Developer, I want infrastructure to be described with Terraform, so that the PoC can be deployed consistently.
 
@@ -492,6 +603,7 @@ As a Developer, I want infrastructure to be described with Terraform, so that th
 - Azure Storage Account.
 - Azure Container Apps hoac App Service.
 - Database cho ticket/document metadata.
+- Database/table cho Inbox, Outbox va Idempotency records.
 - Application Insights.
 
 #### Acceptance criteria
@@ -505,7 +617,7 @@ As a Developer, I want infrastructure to be described with Terraform, so that th
 
 - PoC co the de Terraform o muc scaffold, chua can apply that neu chua co Azure subscription.
 
-### Story 7.2: GitHub Actions CI
+### Story 8.2: GitHub Actions CI
 
 As a Developer, I want GitHub Actions to validate the project, so that broken changes are detected early.
 
@@ -528,33 +640,36 @@ As a Developer, I want GitHub Actions to validate the project, so that broken ch
 
 - Co the tach thanh `frontend-ci.yml`, `backend-ci.yml`, `infra-ci.yml` neu can.
 
-## 10. Definition of Done cho PoC
+## 11. Definition of Done cho PoC
 
 PoC duoc xem la hoan thanh khi co the demo end-to-end:
 
 1. Admin them hoac seed tai lieu noi bo.
 2. Knowledge Service index tai lieu vao Azure AI Search voi Vector search.
 3. Employee tao ticket tu React UI.
-4. Ticket Service publish event `TicketCreated`.
-5. AI Orchestrator nhan event va dung Semantic Kernel + Azure OpenAI de tao suggestion.
+4. Ticket Service ghi Outbox va publish event `TicketCreated`.
+5. AI Orchestrator ghi Inbox, chay Saga va dung Semantic Kernel + Azure OpenAI de tao suggestion.
 6. AI Orchestrator dung Azure AI Search de lay related documents.
 7. Support Agent xem ticket, AI suggestion va related documents.
-8. Support Agent resolve ticket.
+8. Support Agent resolve ticket voi idempotency.
 9. AI Assistant goi duoc it nhat mot Function Calling.
 10. MCP Tool Server expose duoc it nhat `get_ticket` va `search_knowledge`.
 11. Terraform validate pass.
-12. GitHub Actions CI pass.
+12. Smoke test local dung Azure config that pass.
+13. GitHub Actions CI pass neu da bat CI trong scope.
 
-## 11. Thu tu implement goi y cho AI/coder
+## 12. Thu tu implement goi y cho AI/coder
 
 1. Tao repository structure.
 2. Implement Ticket Service CRUD don gian.
 3. Implement React UI tao ticket va xem danh sach ticket.
 4. Them event publish cho `TicketCreated`.
-5. Implement Knowledge Service voi seed documents.
-6. Tao Azure AI Search index va Vector search flow.
-7. Implement AI Orchestrator voi Semantic Kernel va Azure OpenAI.
-8. Them Function Calling cho `get_ticket_status`.
-9. Implement MCP Tool Server voi `get_ticket` va `search_knowledge`.
-10. Them Terraform scaffold.
-11. Them GitHub Actions CI.
+5. Them Outbox worker cho Ticket Service.
+6. Implement Knowledge Service voi seed documents.
+7. Tao Azure AI Search index va Vector search flow.
+8. Implement AI Orchestrator voi Inbox va Saga mini.
+9. Them Function Calling cho `get_ticket_status`.
+10. Implement MCP Tool Server voi `get_ticket` va `search_knowledge`.
+11. Them Idempotency cho create/resolve/reindex.
+12. Them Terraform scaffold.
+13. Them GitHub Actions CI neu can.

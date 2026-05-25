@@ -11,3 +11,8 @@ React
 Terraform
 Azure
 GitHub
+
+Saga Pattern Orchestration
+Idempotency
+Inbox Pattern
+Outbox Pattern

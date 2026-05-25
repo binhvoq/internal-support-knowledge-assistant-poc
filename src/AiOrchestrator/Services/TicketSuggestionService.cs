@@ -19,6 +19,8 @@ public sealed class TicketSuggestionService
     private readonly McpToolGateway _mcp;
     private readonly McpDynamicPluginLoader _mcpLoader;
     private readonly ISupportEventPublisher _publisher;
+    private readonly InboxService _inbox;
+    private readonly SagaLogService _sagaLog;
     private readonly Kernel _kernel;
     private readonly IChatCompletionService? _chat;
     private readonly AzureOpenAIOptions _openAiOptions;
@@ -29,6 +31,8 @@ public sealed class TicketSuggestionService
         McpToolGateway mcp,
         McpDynamicPluginLoader mcpLoader,
         ISupportEventPublisher publisher,
+        InboxService inbox,
+        SagaLogService sagaLog,
         Kernel kernel,
         IOptions<AzureOpenAIOptions> openAiOptions,
         ILogger<TicketSuggestionService> logger)
@@ -37,56 +41,93 @@ public sealed class TicketSuggestionService
         _mcp = mcp;
         _mcpLoader = mcpLoader;
         _publisher = publisher;
+        _inbox = inbox;
+        _sagaLog = sagaLog;
         _kernel = kernel;
         _openAiOptions = openAiOptions.Value;
         _logger = logger;
         _chat = _openAiOptions.Enabled ? kernel.GetRequiredService<IChatCompletionService>() : null;
     }
 
-    public async Task ProcessTicketCreatedAsync(string ticketId, CancellationToken cancellationToken = default)
+    public async Task ProcessTicketCreatedAsync(string ticketId, string? eventId = null, CancellationToken cancellationToken = default)
     {
-        var ticket = await _tickets.GetAsync(ticketId, cancellationToken);
-        if (ticket is null)
-        {
-            _logger.LogWarning("Ticket {TicketId} khong ton tai.", ticketId);
+        eventId ??= $"manual-{ticketId}";
+        if (!await _inbox.TryStartAsync(eventId, ticketId, cancellationToken))
             return;
-        }
-
-        if (ticket.Status is TicketStatus.Suggested or TicketStatus.Resolved
-            && !string.IsNullOrWhiteSpace(ticket.AiSuggestedAnswer))
-        {
-            _logger.LogInformation("Ticket {TicketId} da co AI suggestion — bo qua xu ly trung.", ticketId);
-            return;
-        }
-
-        if (ticket.Status is not TicketStatus.Analyzing)
-            await _tickets.PatchAsync(ticketId, new { status = TicketStatus.Analyzing }, cancellationToken);
-
-        var category = ticket.Category;
-        if (category is SupportCategory.Other or "")
-        {
-            var classified = await ClassifyCategoryDetailedAsync(ticket.Question, cancellationToken);
-            category = classified?.Category ?? TryKeywordClassify(ticket.Question) ?? SupportCategory.Other;
-        }
-
-        var related = await SearchKnowledgeViaMcpAsync(ticket.Question, category, cancellationToken);
-        var suggestion = await GenerateSuggestionAsync(ticket.Question, related, cancellationToken);
-
-        await _tickets.PatchAsync(ticketId, new
-        {
-            status = TicketStatus.Suggested,
-            category,
-            aiSuggestedAnswer = suggestion,
-            relatedDocuments = related
-        }, cancellationToken);
 
         try
         {
-            await _publisher.PublishAsync(SupportEventTypes.AiSuggestionGenerated, new AiSuggestionGeneratedPayload { TicketId = ticketId });
+            await _sagaLog.AddAsync(eventId, ticketId, "ReceiveTicketCreated", "Started", null, cancellationToken);
+            var ticket = await _tickets.GetAsync(ticketId, cancellationToken);
+            if (ticket is null)
+            {
+                await _sagaLog.AddAsync(eventId, ticketId, "LoadTicket", "Failed", "Ticket not found", cancellationToken);
+                _logger.LogWarning("Ticket {TicketId} khong ton tai.", ticketId);
+                await _inbox.MarkProcessedAsync(eventId, cancellationToken);
+                return;
+            }
+
+            if (ticket.Status is TicketStatus.Suggested or TicketStatus.Resolved
+                && !string.IsNullOrWhiteSpace(ticket.AiSuggestedAnswer))
+            {
+                await _sagaLog.AddAsync(eventId, ticketId, "IdempotentSuggestionCheck", "Skipped", "Ticket already has AI suggestion", cancellationToken);
+                _logger.LogInformation("Ticket {TicketId} da co AI suggestion — bo qua xu ly trung.", ticketId);
+                await _inbox.MarkProcessedAsync(eventId, cancellationToken);
+                return;
+            }
+
+            if (ticket.Status is not TicketStatus.Analyzing)
+            {
+                await _sagaLog.AddAsync(eventId, ticketId, "MarkAnalyzing", "Started", null, cancellationToken);
+                await _tickets.PatchAsync(ticketId, new { status = TicketStatus.Analyzing }, cancellationToken);
+                await _sagaLog.AddAsync(eventId, ticketId, "MarkAnalyzing", "Completed", null, cancellationToken);
+            }
+
+            var category = ticket.Category;
+            if (category is SupportCategory.Other or "")
+            {
+                await _sagaLog.AddAsync(eventId, ticketId, "ClassifyCategory", "Started", null, cancellationToken);
+                var classified = await ClassifyCategoryDetailedAsync(ticket.Question, cancellationToken);
+                category = classified?.Category ?? TryKeywordClassify(ticket.Question) ?? SupportCategory.Other;
+                await _sagaLog.AddAsync(eventId, ticketId, "ClassifyCategory", "Completed", category, cancellationToken);
+            }
+
+            await _sagaLog.AddAsync(eventId, ticketId, "SearchKnowledge", "Started", category, cancellationToken);
+            var related = await SearchKnowledgeViaMcpAsync(ticket.Question, category, cancellationToken);
+            await _sagaLog.AddAsync(eventId, ticketId, "SearchKnowledge", "Completed", $"related={related.Count}", cancellationToken);
+
+            await _sagaLog.AddAsync(eventId, ticketId, "GenerateSuggestion", "Started", null, cancellationToken);
+            var suggestion = await GenerateSuggestionAsync(ticket.Question, related, cancellationToken);
+            await _sagaLog.AddAsync(eventId, ticketId, "GenerateSuggestion", "Completed", $"chars={suggestion.Length}", cancellationToken);
+
+            await _sagaLog.AddAsync(eventId, ticketId, "SaveSuggestion", "Started", null, cancellationToken);
+            await _tickets.PatchAsync(ticketId, new
+            {
+                status = TicketStatus.Suggested,
+                category,
+                aiSuggestedAnswer = suggestion,
+                relatedDocuments = related
+            }, cancellationToken);
+            await _sagaLog.AddAsync(eventId, ticketId, "SaveSuggestion", "Completed", null, cancellationToken);
+
+            try
+            {
+                await _publisher.PublishAsync(SupportEventTypes.AiSuggestionGenerated, new AiSuggestionGeneratedPayload { TicketId = ticketId });
+                await _sagaLog.AddAsync(eventId, ticketId, "PublishAISuggestionGenerated", "Completed", null, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                await _sagaLog.AddAsync(eventId, ticketId, "PublishAISuggestionGenerated", "Failed", ex.Message, cancellationToken);
+                _logger.LogWarning(ex, "Publish event {EventType} that bai; suggestion da duoc luu.", SupportEventTypes.AiSuggestionGenerated);
+            }
+
+            await _inbox.MarkProcessedAsync(eventId, cancellationToken);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Publish event {EventType} that bai; suggestion da duoc luu.", SupportEventTypes.AiSuggestionGenerated);
+            await _sagaLog.AddAsync(eventId, ticketId, "Saga", "Failed", ex.Message, CancellationToken.None);
+            await _inbox.MarkFailedAsync(eventId, ex, CancellationToken.None);
+            throw;
         }
     }
 

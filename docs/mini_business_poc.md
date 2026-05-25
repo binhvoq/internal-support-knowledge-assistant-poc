@@ -4,7 +4,7 @@
 
 Xay dung mot PoC nho cho he thong tro ly ho tro noi bo, giup nhan vien tao ticket, tim cau tra loi tu kho tai lieu noi bo, va goi y buoc xu ly tiep theo bang AI.
 
-Trong PoC nay, nghiep vu duoc giu gon: chi tap trung vao ticket ho tro noi bo cho IT/HR/Finance. Muc tieu chinh la co du khong gian de thuc hanh cac ky thuat trong `technical_learn.md`, khong phai xay mot san pham day du.
+Trong PoC nay, nghiep vu duoc giu gon: chi tap trung vao ticket ho tro noi bo cho IT/HR/Finance. Muc tieu chinh la co du khong gian de thuc hanh cac ky thuat trong `docs/technical_learn.md`, khong phai xay mot san pham day du.
 
 ## 2. Boi canh nghiep vu
 
@@ -26,11 +26,12 @@ Nhan vien thuong gui cau hoi trung lap cho team support. Team support muon co mo
 
 ## 3. Pham vi mini
 
-Chi can lam 3 luong chinh:
+Chi can lam 4 luong chinh:
 
 1. Nhan vien tao cau hoi ho tro.
 2. He thong tim tai lieu lien quan va sinh cau tra loi goi y.
 3. Support agent quan ly ticket va ghi nhan ket qua xu ly.
+4. He thong xu ly retry/event trung lap mot cach an toan de minh hoa Saga, Idempotency, Inbox va Outbox.
 
 Khong can lam day du authentication, phan quyen phuc tap, billing, notification that, hay dashboard nang cao.
 
@@ -54,13 +55,14 @@ Thanh phan dung LLM tren Azure OpenAI de doc cau hoi, tim tri thuc lien quan, go
 
 1. Employee mo ung dung React.
 2. Employee nhap noi dung cau hoi, vi du: "Toi quen mat khau VPN, can lam gi?"
-3. Frontend goi Ticket Service de tao ticket moi voi trang thai `New`.
-4. Ticket Service publish event `TicketCreated`.
-5. AI Orchestrator Service nhan event nay.
-6. AI Orchestrator dung Azure AI Search va Vector search de tim tai lieu lien quan.
-7. AI Orchestrator dung Semantic Kernel ket hop Azure OpenAI de tao cau tra loi goi y.
-8. AI Orchestrator cap nhat ticket voi truong `aiSuggestedAnswer`.
-9. Support Agent thay ticket va cau tra loi goi y tren man hinh.
+3. Frontend goi Ticket Service de tao ticket moi voi trang thai `New`, kem `idempotencyKey` de tranh double submit.
+4. Ticket Service luu ticket va ghi event `TicketCreated` vao Outbox trong cung transaction.
+5. Outbox worker publish `TicketCreated` len Azure Service Bus.
+6. AI Orchestrator nhan event, ghi vao Inbox de danh dau event dang xu ly.
+7. AI Orchestrator dung Azure AI Search va Vector search de tim tai lieu lien quan.
+8. AI Orchestrator dung Semantic Kernel ket hop Azure OpenAI de tao cau tra loi goi y.
+9. AI Orchestrator cap nhat ticket voi truong `aiSuggestedAnswer` va publish `AISuggestionGenerated`.
+10. Support Agent thay ticket va cau tra loi goi y tren man hinh.
 
 ### Flow 2: Support agent xu ly ticket
 
@@ -87,6 +89,20 @@ AI Assistant co the dung Function Calling cho cac tac vu nho:
 
 Vi du employee hoi: "Ticket hom qua cua toi xu ly den dau roi?" AI se goi `get_ticket_status` thay vi chi tra loi bang text.
 
+### Flow 4: Saga xu ly ticket moi
+
+Luong tao suggestion duoc xem nhu mot Saga nho do AI Orchestrator dieu phoi:
+
+1. Nhan `TicketCreated`.
+2. Chuyen ticket sang `Analyzing`.
+3. Phan loai category neu employee de trong hoac chon `Other`.
+4. Search knowledge bang MCP tool `search_knowledge`.
+5. Goi LLM tren Azure OpenAI de tao suggestion.
+6. Cap nhat ticket sang `Suggested`.
+7. Neu buoc search/LLM loi, cap nhat ticket sang `NeedsManualReview` hoac giu `Analyzing` kem error reason de agent xu ly tay.
+
+Saga nay co tinh mini: khong can workflow engine rieng, chi can mot orchestrator service quan ly state va cac buoc xu ly.
+
 ## 6. Kien truc de xuat
 
 PoC co the chia thanh cac service nho theo huong Microservices:
@@ -102,7 +118,8 @@ PoC co the chia thanh cac service nho theo huong Microservices:
 
 - Quan ly ticket.
 - API tao ticket, lay ticket, cap nhat ticket.
-- Publish event `TicketCreated`, `TicketUpdated`, `TicketResolved`.
+- Ghi Outbox event `TicketCreated`, `TicketUpdated`, `TicketResolved`.
+- Ho tro Idempotency cho tao ticket, resolve ticket va update status.
 
 ### Knowledge Service
 
@@ -110,10 +127,13 @@ PoC co the chia thanh cac service nho theo huong Microservices:
 - Upload hoac seed tai lieu markdown/text.
 - Dong bo tai lieu sang Azure AI Search.
 - Tao embedding de dung Vector search.
+- Ho tro Idempotency cho re-index de tranh chay nhieu job trung nhau.
 
 ### AI Orchestrator Service
 
 - Lang nghe event tu Ticket Service.
+- Luu Inbox message de tranh xu ly lap lai mot event.
+- Dieu phoi Saga tao AI suggestion cho ticket moi.
 - Dung Semantic Kernel de dieu phoi prompt, memory, plugin/function.
 - Goi Azure OpenAI LLM de sinh cau tra loi.
 - Dung Azure AI Search de truy van tai lieu bang keyword search va Vector search.
@@ -152,7 +172,54 @@ Vi du:
 
 Tren Azure, co the dung Azure Service Bus hoac Azure Event Grid cho phan event.
 
-## 8. Azure AI Search va Vector search
+## 8. Saga, Idempotency, Inbox va Outbox
+
+Bon pattern nay duoc gan vao nghiep vu mini, khong can lam thanh framework lon.
+
+### Saga Pattern Orchestration
+
+AI Orchestrator dieu phoi luong `TicketCreated -> Analyzing -> SearchKnowledge -> GenerateSuggestion -> Suggested`.
+
+Neu mot buoc loi:
+
+- Search loi: ticket duoc cap nhat `NeedsManualReview`, agent van thay ticket de xu ly tay.
+- LLM loi: ticket giu related documents neu co, nhung suggestion de trong va co error reason.
+- Update ticket loi: orchestrator retry theo event/message retry policy.
+
+### Idempotency
+
+Can idempotency o cac thao tac co kha nang bi retry:
+
+- `POST /tickets`: employee bam submit hai lan hoac frontend retry.
+- `POST /tickets/{id}/resolve`: agent bam resolve nhieu lan.
+- `POST /documents/reindex`: admin bam re-index nhieu lan.
+- AI Orchestrator cap nhat suggestion: cung mot `TicketCreated` event khong tao nhieu suggestion khac nhau.
+
+Request co the dung `Idempotency-Key` header hoac field `idempotencyKey`. Service luu key kem response/status da tao.
+
+### Outbox Pattern
+
+Ticket Service va Knowledge Service khong publish event truc tiep ngay trong request handler. Thay vao do:
+
+1. Ghi business data vao database.
+2. Ghi outbox record cung transaction.
+3. Background worker doc outbox va publish len Azure Service Bus.
+4. Publish thanh cong thi mark outbox record la `Published`.
+
+Pattern nay giup tranh tinh huong database da luu ticket nhung event `TicketCreated` bi mat.
+
+### Inbox Pattern
+
+AI Orchestrator va cac consumer khac luu event da nhan vao Inbox:
+
+1. Khi nhan message, kiem tra `messageId` hoac `eventId`.
+2. Neu da xu ly thanh cong, skip.
+3. Neu dang xu ly hoac bi loi truoc do, tiep tuc theo retry policy.
+4. Khi Saga xong, mark Inbox record la `Processed`.
+
+Pattern nay giup Service Bus redelivery khong lam AI tao suggestion nhieu lan cho cung mot ticket.
+
+## 9. Azure AI Search va Vector search
 
 Azure AI Search duoc dung lam knowledge retrieval layer.
 
@@ -178,7 +245,7 @@ Vi du cau hoi:
 
 He thong co the tim duoc tai lieu "Huong dan reset VPN profile" du cau hoi khong trung tu khoa hoan toan.
 
-## 9. Semantic Kernel
+## 10. Semantic Kernel
 
 Semantic Kernel duoc dung trong AI Orchestrator Service de:
 
@@ -193,7 +260,7 @@ Plugin goi y:
 - `KnowledgeSearchPlugin`
 - `PolicyDocumentPlugin`
 
-## 10. LLM va Azure OpenAI
+## 11. LLM va Azure OpenAI
 
 Dung LLM thong qua Azure OpenAI cho cac tac vu:
 
@@ -210,7 +277,7 @@ Prompt can yeu cau AI:
 - Khong tu bia chinh sach noi bo.
 - Tra ve cau tra loi ngan gon, de agent co the sua nhanh.
 
-## 11. React UI
+## 12. React UI
 
 React app nen co cac man hinh nho:
 
@@ -240,7 +307,7 @@ React app nen co cac man hinh nho:
 - Danh sach tai lieu.
 - Nut re-index.
 
-## 12. Terraform va Azure
+## 13. Terraform va Azure
 
 Dung Terraform de khai bao infrastructure tren Azure.
 
@@ -253,11 +320,12 @@ Tai nguyen toi thieu:
 - Azure OpenAI.
 - Azure Storage Account cho tai lieu raw.
 - Azure Cosmos DB hoac Azure SQL cho ticket/document metadata.
+- Database/table cho Outbox va Inbox records.
 - Application Insights de log va trace.
 
 PoC co the chay local truoc, nhung Terraform van nen co folder rieng de mo ta cloud target.
 
-## 13. GitHub workflow
+## 14. GitHub workflow
 
 Dung GitHub de quan ly code va CI/CD co ban.
 
@@ -281,7 +349,7 @@ GitHub Actions toi thieu:
 - Run lint.
 - Terraform validate/plan cho folder `/infra/terraform`.
 
-## 14. Data model toi thieu
+## 15. Data model toi thieu
 
 ### Ticket
 
@@ -312,7 +380,34 @@ GitHub Actions toi thieu:
 }
 ```
 
-## 15. API toi thieu
+### OutboxMessage
+
+```json
+{
+  "id": "OUT-001",
+  "eventId": "EVT-001",
+  "eventType": "TicketCreated",
+  "payload": "{...}",
+  "status": "Pending",
+  "createdAt": "2026-05-23T09:00:00Z",
+  "publishedAt": null
+}
+```
+
+### InboxMessage
+
+```json
+{
+  "id": "IN-001",
+  "eventId": "EVT-001",
+  "consumer": "ai-orchestrator",
+  "status": "Processed",
+  "receivedAt": "2026-05-23T09:00:03Z",
+  "processedAt": "2026-05-23T09:00:20Z"
+}
+```
+
+## 16. API toi thieu
 
 ### Ticket Service
 
@@ -321,6 +416,7 @@ GitHub Actions toi thieu:
 - `GET /tickets/{id}`
 - `PATCH /tickets/{id}`
 - `POST /tickets/{id}/resolve`
+- `GET /outbox` hoac internal worker endpoint/log de debug PoC.
 
 ### Knowledge Service
 
@@ -334,6 +430,7 @@ GitHub Actions toi thieu:
 - `POST /ai/suggest-answer`
 - `POST /ai/chat`
 - `POST /ai/classify-ticket`
+- Worker consume `TicketCreated` va ghi Inbox.
 
 ### MCP Tool Server
 
@@ -342,21 +439,24 @@ GitHub Actions toi thieu:
 - Tool: `search_knowledge`
 - Tool: `list_support_categories`
 
-## 16. Acceptance criteria
+## 17. Acceptance criteria
 
 PoC duoc xem la dat khi:
 
 - React app tao duoc ticket moi.
-- Ticket Service publish duoc event `TicketCreated`.
+- Ticket Service ghi duoc Outbox va publish duoc event `TicketCreated`.
 - AI Orchestrator nhan event va sinh duoc `aiSuggestedAnswer`.
+- AI Orchestrator co Inbox de tranh xu ly lap lai event.
+- Saga tao suggestion co state ro rang va co fallback khi search/LLM loi.
+- Cac API tao ticket, resolve ticket va re-index co idempotency toi thieu.
 - Azure AI Search tra ve duoc tai lieu lien quan bang Vector search.
 - Semantic Kernel duoc dung de dieu phoi prompt va plugin/function.
 - Co it nhat mot demo Function Calling, vi du lay trang thai ticket.
 - MCP Tool Server expose duoc it nhat hai tool nghiep vu.
 - Terraform co the validate va mo ta duoc cac Azure resources chinh.
-- GitHub Actions build/test/validate duoc project.
+- GitHub Actions build/test/validate duoc project neu scope CI duoc bat.
 
-## 17. Ly do de tai phu hop de luyen tap
+## 18. Ly do de tai phu hop de luyen tap
 
 De tai nay nho ve nghiep vu nhung cham du cac keyword can hoc:
 
@@ -373,4 +473,7 @@ De tai nay nho ve nghiep vu nhung cham du cac keyword can hoc:
 - Terraform: khai bao ha tang.
 - Azure: moi truong cloud target.
 - GitHub: source control va CI/CD.
-
+- Saga Pattern Orchestration: dieu phoi luong tao AI suggestion qua nhieu buoc co retry/fallback.
+- Idempotency: tranh double submit, double resolve, double re-index.
+- Inbox Pattern: consumer xu ly event dung mot lan ve mat nghiep vu.
+- Outbox Pattern: dam bao thay doi database va event khong bi lech nhau.

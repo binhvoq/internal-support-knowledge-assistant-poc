@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using SupportPoc.KnowledgeService.Data;
@@ -31,6 +34,17 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<KnowledgeDbContext>();
     await db.Database.EnsureCreatedAsync();
+    await db.Database.ExecuteSqlRawAsync("""
+        CREATE TABLE IF NOT EXISTS IdempotencyRecords (
+            Key TEXT NOT NULL,
+            Scope TEXT NOT NULL,
+            RequestHash TEXT NOT NULL,
+            ResponseJson TEXT NOT NULL,
+            StatusCode INTEGER NOT NULL,
+            CreatedAt TEXT NOT NULL,
+            CONSTRAINT PK_IdempotencyRecords PRIMARY KEY (Scope, Key)
+        );
+        """);
     if (!await db.Documents.AnyAsync())
     {
         db.Documents.AddRange(SeedData.Documents);
@@ -101,12 +115,28 @@ app.MapPost("/documents", async (
 app.MapGet("/documents/reindex-status", (ReindexState state) => Results.Ok(state.Snapshot()));
 
 app.MapPost("/documents/reindex", async (
+    HttpContext httpContext,
     KnowledgeDbContext db,
     KnowledgeSearchService search,
     EmbeddingService embeddings,
     ReindexState state,
     ISupportEventPublisher publisher) =>
 {
+    const string scope = "POST /documents/reindex";
+    var idempotencyKey = ReadIdempotencyKey(httpContext);
+    var requestHash = HashIdempotency(scope, "reindex");
+    if (!string.IsNullOrWhiteSpace(idempotencyKey))
+    {
+        var existing = await db.IdempotencyRecords.FindAsync([scope, idempotencyKey], httpContext.RequestAborted);
+        if (existing is not null)
+        {
+            if (existing.RequestHash != requestHash)
+                return Results.Conflict(new { error = "Idempotency-Key da duoc dung voi payload khac." });
+            app.Logger.LogInformation("Idempotency replay {Scope} Key={Key}", scope, idempotencyKey);
+            return Results.Text(existing.ResponseJson, "application/json", statusCode: existing.StatusCode);
+        }
+    }
+
     if (state.Status == "Indexing")
         return Results.Conflict(new { error = "Re-index dang chay." });
 
@@ -124,7 +154,21 @@ app.MapPost("/documents/reindex", async (
         await search.UpsertDocumentsAsync(batch);
         state.Set("Completed");
         await TryPublishAsync(app.Logger, publisher, SupportEventTypes.KnowledgeIndexUpdated, new { documentCount = docs.Count });
-        return Results.Ok(new { status = "Completed", documentCount = docs.Count });
+        var response = new { status = "Completed", documentCount = docs.Count };
+        if (!string.IsNullOrWhiteSpace(idempotencyKey))
+        {
+            db.IdempotencyRecords.Add(new IdempotencyRecordEntity
+            {
+                Scope = scope,
+                Key = idempotencyKey,
+                RequestHash = requestHash,
+                ResponseJson = JsonSerializer.Serialize(response, new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                StatusCode = StatusCodes.Status200OK,
+                CreatedAt = DateTimeOffset.UtcNow
+            });
+            await db.SaveChangesAsync();
+        }
+        return Results.Ok(response);
     }
     catch (Exception ex)
     {
@@ -189,6 +233,17 @@ app.MapGet("/search", async (
 
 app.MapGet("/categories", () => Results.Ok(SupportCategory.All));
 
+app.MapGet("/debug/idempotency", async (KnowledgeDbContext db) =>
+{
+    var items = (await db.IdempotencyRecords
+        .ToListAsync())
+        .OrderByDescending(x => x.CreatedAt)
+        .Take(50)
+        .Select(x => new { x.Scope, x.Key, x.RequestHash, x.StatusCode, x.CreatedAt })
+        .ToList();
+    return Results.Ok(items);
+});
+
 app.Run();
 
 static async Task<bool> TryPublishAsync<TPayload>(
@@ -247,5 +302,16 @@ static IReadOnlyList<RelatedDocument> SearchLocal(
         .OrderByDescending(hit => hit.Score)
         .Take(5)
         .ToList();
+
+static string? ReadIdempotencyKey(HttpContext httpContext) =>
+    httpContext.Request.Headers.TryGetValue("Idempotency-Key", out var values)
+        ? values.FirstOrDefault()
+        : null;
+
+static string HashIdempotency(string scope, string payload)
+{
+    var bytes = SHA256.HashData(Encoding.UTF8.GetBytes($"{scope}:{payload}"));
+    return Convert.ToHexString(bytes);
+}
 
 public sealed record CreateDocumentRequest(string Title, string Category, string Content, string? SourceUrl);

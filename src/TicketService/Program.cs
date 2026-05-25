@@ -6,12 +6,14 @@ using SupportPoc.Shared.Messaging;
 using SupportPoc.Shared.Models;
 using SupportPoc.TicketService.Data;
 using SupportPoc.TicketService.Services;
+using SupportPoc.TicketService.Workers;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.Configure<ServiceBusOptions>(builder.Configuration.GetSection(ServiceBusOptions.SectionName));
 builder.Services.AddSingleton<ISupportEventPublisher, ServiceBusEventPublisher>();
 builder.Services.AddHttpClient<AiOrchestratorNotifier>();
+builder.Services.AddHostedService<OutboxPublisherWorker>();
 builder.Services.AddDbContext<TicketDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("Tickets") ?? "Data Source=tickets.db"));
 builder.Services.AddCors(options =>
@@ -24,16 +26,84 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<TicketDbContext>();
     await db.Database.EnsureCreatedAsync();
+    await db.Database.ExecuteSqlRawAsync("""
+        CREATE TABLE IF NOT EXISTS OutboxMessages (
+            Id TEXT NOT NULL CONSTRAINT PK_OutboxMessages PRIMARY KEY,
+            EventId TEXT NOT NULL,
+            EventType TEXT NOT NULL,
+            PayloadJson TEXT NOT NULL,
+            Status TEXT NOT NULL,
+            Error TEXT NULL,
+            CreatedAt TEXT NOT NULL,
+            PublishedAt TEXT NULL
+        );
+        """);
+    await db.Database.ExecuteSqlRawAsync("""
+        CREATE UNIQUE INDEX IF NOT EXISTS IX_OutboxMessages_EventId ON OutboxMessages (EventId);
+        """);
+    await db.Database.ExecuteSqlRawAsync("""
+        CREATE TABLE IF NOT EXISTS IdempotencyRecords (
+            Key TEXT NOT NULL,
+            Scope TEXT NOT NULL,
+            RequestHash TEXT NOT NULL,
+            ResponseJson TEXT NOT NULL,
+            StatusCode INTEGER NOT NULL,
+            CreatedAt TEXT NOT NULL,
+            CONSTRAINT PK_IdempotencyRecords PRIMARY KEY (Scope, Key)
+        );
+        """);
 }
 
 var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "ticket-service" }));
 
-app.MapPost("/tickets", async (CreateTicketRequest request, TicketDbContext db, ISupportEventPublisher publisher, AiOrchestratorNotifier aiNotifier, IOptions<ServiceBusOptions> busOptions) =>
+app.MapGet("/debug/outbox", async (TicketDbContext db) =>
+{
+    var items = (await db.OutboxMessages
+        .ToListAsync())
+        .OrderByDescending(x => x.CreatedAt)
+        .Take(50)
+        .Select(x => new { x.EventId, x.EventType, x.Status, x.CreatedAt, x.PublishedAt, x.Error })
+        .ToList();
+    return Results.Ok(items);
+});
+
+app.MapGet("/debug/idempotency", async (TicketDbContext db) =>
+{
+    var items = (await db.IdempotencyRecords
+        .ToListAsync())
+        .OrderByDescending(x => x.CreatedAt)
+        .Take(50)
+        .Select(x => new { x.Scope, x.Key, x.RequestHash, x.StatusCode, x.CreatedAt })
+        .ToList();
+    return Results.Ok(items);
+});
+
+app.MapPost("/tickets", async (
+    CreateTicketRequest request,
+    HttpContext httpContext,
+    TicketDbContext db,
+    AiOrchestratorNotifier aiNotifier,
+    IOptions<ServiceBusOptions> busOptions) =>
 {
     if (string.IsNullOrWhiteSpace(request.EmployeeId) || string.IsNullOrWhiteSpace(request.Question))
         return Results.BadRequest(new { error = "employeeId va question la bat buoc." });
+
+    const string scope = "POST /tickets";
+    var idempotencyKey = IdempotencyHelper.ReadKey(httpContext);
+    var requestHash = IdempotencyHelper.Hash(scope, request);
+    if (!string.IsNullOrWhiteSpace(idempotencyKey))
+    {
+        var existing = await db.IdempotencyRecords.FindAsync([scope, idempotencyKey], httpContext.RequestAborted);
+        if (existing is not null)
+        {
+            if (existing.RequestHash != requestHash)
+                return Results.Conflict(new { error = "Idempotency-Key da duoc dung voi payload khac." });
+            app.Logger.LogInformation("Idempotency replay {Scope} Key={Key}", scope, idempotencyKey);
+            return IdempotencyHelper.Replay(existing);
+        }
+    }
 
     var category = string.IsNullOrWhiteSpace(request.Category) ? SupportCategory.Other : request.Category;
     var now = DateTimeOffset.UtcNow;
@@ -50,12 +120,26 @@ app.MapPost("/tickets", async (CreateTicketRequest request, TicketDbContext db, 
     };
 
     db.Tickets.Add(entity);
+    db.OutboxMessages.Add(OutboxFactory.Create(SupportEventTypes.TicketCreated, new TicketCreatedPayload { TicketId = entity.Id }));
+    var dto = TicketMapper.ToDto(entity);
+    if (!string.IsNullOrWhiteSpace(idempotencyKey))
+    {
+        db.IdempotencyRecords.Add(new IdempotencyRecordEntity
+        {
+            Scope = scope,
+            Key = idempotencyKey,
+            RequestHash = requestHash,
+            ResponseJson = JsonSerializer.Serialize(dto, jsonOptions),
+            StatusCode = StatusCodes.Status201Created,
+            CreatedAt = now
+        });
+    }
+
     await db.SaveChangesAsync();
-    var published = await TryPublishAsync(app.Logger, publisher, SupportEventTypes.TicketCreated, new TicketCreatedPayload { TicketId = entity.Id });
-    if (!busOptions.Value.Enabled || !published)
+    if (!busOptions.Value.Enabled)
         _ = aiNotifier.NotifyTicketCreatedAsync(entity.Id);
 
-    return Results.Created($"/tickets/{entity.Id}", TicketMapper.ToDto(entity));
+    return Results.Created($"/tickets/{entity.Id}", dto);
 });
 
 app.MapGet("/tickets", async (string? status, string? category, TicketDbContext db) =>
@@ -76,7 +160,7 @@ app.MapGet("/tickets/{id}", async (string id, TicketDbContext db) =>
     return entity is null ? Results.NotFound() : Results.Ok(TicketMapper.ToDto(entity));
 });
 
-app.MapPatch("/tickets/{id}", async (string id, UpdateTicketRequest request, TicketDbContext db, ISupportEventPublisher publisher) =>
+app.MapPatch("/tickets/{id}", async (string id, UpdateTicketRequest request, TicketDbContext db) =>
 {
     var entity = await db.Tickets.FindAsync(id);
     if (entity is null) return Results.NotFound();
@@ -93,13 +177,13 @@ app.MapPatch("/tickets/{id}", async (string id, UpdateTicketRequest request, Tic
         entity.RelatedDocumentsJson = JsonSerializer.Serialize(request.RelatedDocuments, jsonOptions);
 
     entity.UpdatedAt = DateTimeOffset.UtcNow;
+    db.OutboxMessages.Add(OutboxFactory.Create(SupportEventTypes.TicketUpdated, new { ticketId = id }));
     await db.SaveChangesAsync();
-    await TryPublishAsync(app.Logger, publisher, SupportEventTypes.TicketUpdated, new { ticketId = id });
 
     return Results.Ok(TicketMapper.ToDto(entity));
 });
 
-app.MapPost("/tickets/{id}/resolve", async (string id, ResolveTicketRequest request, TicketDbContext db, ISupportEventPublisher publisher) =>
+app.MapPost("/tickets/{id}/resolve", async (string id, ResolveTicketRequest request, HttpContext httpContext, TicketDbContext db) =>
 {
     var entity = await db.Tickets.FindAsync(id);
     if (entity is null) return Results.NotFound();
@@ -107,47 +191,57 @@ app.MapPost("/tickets/{id}/resolve", async (string id, ResolveTicketRequest requ
     if (string.IsNullOrWhiteSpace(request.FinalAnswer))
         return Results.BadRequest(new { error = "finalAnswer la bat buoc khi resolve ticket." });
 
+    var scope = $"POST /tickets/{id}/resolve";
+    var idempotencyKey = IdempotencyHelper.ReadKey(httpContext);
+    var requestHash = IdempotencyHelper.Hash(scope, request);
+    if (!string.IsNullOrWhiteSpace(idempotencyKey))
+    {
+        var existing = await db.IdempotencyRecords.FindAsync([scope, idempotencyKey], httpContext.RequestAborted);
+        if (existing is not null)
+        {
+            if (existing.RequestHash != requestHash)
+                return Results.Conflict(new { error = "Idempotency-Key da duoc dung voi payload khac." });
+            app.Logger.LogInformation("Idempotency replay {Scope} Key={Key}", scope, idempotencyKey);
+            return IdempotencyHelper.Replay(existing);
+        }
+    }
+
     entity.Status = TicketStatus.Resolved;
     entity.FinalAnswer = request.FinalAnswer.Trim();
     entity.UpdatedAt = DateTimeOffset.UtcNow;
-    await db.SaveChangesAsync();
-    await TryPublishAsync(app.Logger, publisher, SupportEventTypes.TicketResolved, new TicketResolvedPayload { TicketId = id });
+    db.OutboxMessages.Add(OutboxFactory.Create(SupportEventTypes.TicketResolved, new TicketResolvedPayload { TicketId = id }));
+    var dto = TicketMapper.ToDto(entity);
+    if (!string.IsNullOrWhiteSpace(idempotencyKey))
+    {
+        db.IdempotencyRecords.Add(new IdempotencyRecordEntity
+        {
+            Scope = scope,
+            Key = idempotencyKey,
+            RequestHash = requestHash,
+            ResponseJson = JsonSerializer.Serialize(dto, jsonOptions),
+            StatusCode = StatusCodes.Status200OK,
+            CreatedAt = DateTimeOffset.UtcNow
+        });
+    }
 
-    return Results.Ok(TicketMapper.ToDto(entity));
+    await db.SaveChangesAsync();
+
+    return Results.Ok(dto);
 });
 
-app.MapPost("/tickets/{id}/reopen", async (string id, TicketDbContext db, ISupportEventPublisher publisher) =>
+app.MapPost("/tickets/{id}/reopen", async (string id, TicketDbContext db) =>
 {
     var entity = await db.Tickets.FindAsync(id);
     if (entity is null) return Results.NotFound();
 
     entity.Status = TicketStatus.Reopened;
     entity.UpdatedAt = DateTimeOffset.UtcNow;
+    db.OutboxMessages.Add(OutboxFactory.Create(SupportEventTypes.TicketUpdated, new { ticketId = id, status = TicketStatus.Reopened }));
     await db.SaveChangesAsync();
-    await TryPublishAsync(app.Logger, publisher, SupportEventTypes.TicketUpdated, new { ticketId = id, status = TicketStatus.Reopened });
     return Results.Ok(TicketMapper.ToDto(entity));
 });
 
 app.Run();
-
-static async Task<bool> TryPublishAsync<TPayload>(
-    ILogger logger,
-    ISupportEventPublisher publisher,
-    string eventType,
-    TPayload payload,
-    CancellationToken cancellationToken = default)
-{
-    try
-    {
-        await publisher.PublishAsync(eventType, payload, cancellationToken);
-        return true;
-    }
-    catch (Exception ex)
-    {
-        logger.LogWarning(ex, "Publish event {EventType} that bai; tiep tuc local flow.", eventType);
-        return false;
-    }
-}
 
 public sealed record CreateTicketRequest(string EmployeeId, string Question, string? Category);
 public sealed record UpdateTicketRequest(
