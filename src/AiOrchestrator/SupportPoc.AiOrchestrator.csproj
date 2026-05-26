@@ -1,14 +1,17 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>988241c9-bd78-4860-94dd-65a2e19e4e9d</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Azure.Messaging.ServiceBus" Version="7.20.1" />
     <PackageReference Include="Azure.Search.Documents" Version="12.0.0" />
+    <PackageReference Include="MassTransit" Version="8.5.9" />
+    <PackageReference Include="MassTransit.Azure.ServiceBus.Core" Version="8.5.9" />
+    <PackageReference Include="MassTransit.EntityFrameworkCore" Version="8.5.9" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="8.0.27" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.8" />
     <PackageReference Include="Microsoft.SemanticKernel" Version="1.76.0" />

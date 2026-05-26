@@ -1,134 +1,41 @@
-using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 using Microsoft.SemanticKernel.Connectors.AzureOpenAI;
-using SupportPoc.AiOrchestrator.Clients;
 using SupportPoc.AiOrchestrator.Mcp;
 using SupportPoc.AiOrchestrator.Options;
-using SupportPoc.Shared.Events;
-using SupportPoc.Shared.Messaging;
-using SupportPoc.Shared.Models;
 
 namespace SupportPoc.AiOrchestrator.Services;
 
+// Sau khi chuyen sang MassTransit saga, service nay CHI con ho tro cac HTTP endpoint
+// (chat / suggest-answer / classify-ticket) - khong con orchestration logic nua.
+// Toan bo orchestration nam o TicketSuggestionStateMachine.
 public sealed class TicketSuggestionService
 {
-    private readonly TicketApiClient _tickets;
+    private readonly AiPipelineService _pipeline;
     private readonly McpToolGateway _mcp;
     private readonly McpDynamicPluginLoader _mcpLoader;
-    private readonly ISupportEventPublisher _publisher;
-    private readonly InboxService _inbox;
-    private readonly SagaLogService _sagaLog;
     private readonly Kernel _kernel;
     private readonly IChatCompletionService? _chat;
     private readonly AzureOpenAIOptions _openAiOptions;
     private readonly ILogger<TicketSuggestionService> _logger;
 
     public TicketSuggestionService(
-        TicketApiClient tickets,
+        AiPipelineService pipeline,
         McpToolGateway mcp,
         McpDynamicPluginLoader mcpLoader,
-        ISupportEventPublisher publisher,
-        InboxService inbox,
-        SagaLogService sagaLog,
         Kernel kernel,
         IOptions<AzureOpenAIOptions> openAiOptions,
         ILogger<TicketSuggestionService> logger)
     {
-        _tickets = tickets;
+        _pipeline = pipeline;
         _mcp = mcp;
         _mcpLoader = mcpLoader;
-        _publisher = publisher;
-        _inbox = inbox;
-        _sagaLog = sagaLog;
         _kernel = kernel;
         _openAiOptions = openAiOptions.Value;
         _logger = logger;
         _chat = _openAiOptions.Enabled ? kernel.GetRequiredService<IChatCompletionService>() : null;
-    }
-
-    public async Task ProcessTicketCreatedAsync(string ticketId, string? eventId = null, CancellationToken cancellationToken = default)
-    {
-        eventId ??= $"manual-{ticketId}";
-        if (!await _inbox.TryStartAsync(eventId, ticketId, cancellationToken))
-            return;
-
-        try
-        {
-            await _sagaLog.AddAsync(eventId, ticketId, "ReceiveTicketCreated", "Started", null, cancellationToken);
-            var ticket = await _tickets.GetAsync(ticketId, cancellationToken);
-            if (ticket is null)
-            {
-                await _sagaLog.AddAsync(eventId, ticketId, "LoadTicket", "Failed", "Ticket not found", cancellationToken);
-                _logger.LogWarning("Ticket {TicketId} khong ton tai.", ticketId);
-                await _inbox.MarkProcessedAsync(eventId, cancellationToken);
-                return;
-            }
-
-            if (ticket.Status is TicketStatus.Suggested or TicketStatus.Resolved
-                && !string.IsNullOrWhiteSpace(ticket.AiSuggestedAnswer))
-            {
-                await _sagaLog.AddAsync(eventId, ticketId, "IdempotentSuggestionCheck", "Skipped", "Ticket already has AI suggestion", cancellationToken);
-                _logger.LogInformation("Ticket {TicketId} da co AI suggestion — bo qua xu ly trung.", ticketId);
-                await _inbox.MarkProcessedAsync(eventId, cancellationToken);
-                return;
-            }
-
-            if (ticket.Status is not TicketStatus.Analyzing)
-            {
-                await _sagaLog.AddAsync(eventId, ticketId, "MarkAnalyzing", "Started", null, cancellationToken);
-                await _tickets.PatchAsync(ticketId, new { status = TicketStatus.Analyzing }, cancellationToken);
-                await _sagaLog.AddAsync(eventId, ticketId, "MarkAnalyzing", "Completed", null, cancellationToken);
-            }
-
-            var category = ticket.Category;
-            if (category is SupportCategory.Other or "")
-            {
-                await _sagaLog.AddAsync(eventId, ticketId, "ClassifyCategory", "Started", null, cancellationToken);
-                var classified = await ClassifyCategoryDetailedAsync(ticket.Question, cancellationToken);
-                category = classified?.Category ?? TryKeywordClassify(ticket.Question) ?? SupportCategory.Other;
-                await _sagaLog.AddAsync(eventId, ticketId, "ClassifyCategory", "Completed", category, cancellationToken);
-            }
-
-            await _sagaLog.AddAsync(eventId, ticketId, "SearchKnowledge", "Started", category, cancellationToken);
-            var related = await SearchKnowledgeViaMcpAsync(ticket.Question, category, cancellationToken);
-            await _sagaLog.AddAsync(eventId, ticketId, "SearchKnowledge", "Completed", $"related={related.Count}", cancellationToken);
-
-            await _sagaLog.AddAsync(eventId, ticketId, "GenerateSuggestion", "Started", null, cancellationToken);
-            var suggestion = await GenerateSuggestionAsync(ticket.Question, related, cancellationToken);
-            await _sagaLog.AddAsync(eventId, ticketId, "GenerateSuggestion", "Completed", $"chars={suggestion.Length}", cancellationToken);
-
-            await _sagaLog.AddAsync(eventId, ticketId, "SaveSuggestion", "Started", null, cancellationToken);
-            await _tickets.PatchAsync(ticketId, new
-            {
-                status = TicketStatus.Suggested,
-                category,
-                aiSuggestedAnswer = suggestion,
-                relatedDocuments = related
-            }, cancellationToken);
-            await _sagaLog.AddAsync(eventId, ticketId, "SaveSuggestion", "Completed", null, cancellationToken);
-
-            try
-            {
-                await _publisher.PublishAsync(SupportEventTypes.AiSuggestionGenerated, new AiSuggestionGeneratedPayload { TicketId = ticketId });
-                await _sagaLog.AddAsync(eventId, ticketId, "PublishAISuggestionGenerated", "Completed", null, cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                await _sagaLog.AddAsync(eventId, ticketId, "PublishAISuggestionGenerated", "Failed", ex.Message, cancellationToken);
-                _logger.LogWarning(ex, "Publish event {EventType} that bai; suggestion da duoc luu.", SupportEventTypes.AiSuggestionGenerated);
-            }
-
-            await _inbox.MarkProcessedAsync(eventId, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            await _sagaLog.AddAsync(eventId, ticketId, "Saga", "Failed", ex.Message, CancellationToken.None);
-            await _inbox.MarkFailedAsync(eventId, ex, CancellationToken.None);
-            throw;
-        }
     }
 
     public async Task<string> ChatAsync(string message, CancellationToken cancellationToken = default)
@@ -167,195 +74,14 @@ public sealed class TicketSuggestionService
 
     public async Task<string> SuggestAnswerAsync(string question, string? category, CancellationToken cancellationToken = default)
     {
-        var related = await SearchKnowledgeViaMcpAsync(question, category ?? SupportCategory.Other, cancellationToken);
-        return await GenerateSuggestionAsync(question, related, cancellationToken);
+        var related = await _pipeline.SearchKnowledgeAsync(question, category, cancellationToken);
+        return await _pipeline.GenerateAsync(question, related, cancellationToken);
     }
 
     public async Task<ClassificationResult?> ClassifyTicketAsync(string question, CancellationToken cancellationToken = default)
     {
-        var parsed = await ClassifyCategoryDetailedAsync(question, cancellationToken);
-        return parsed;
-    }
-
-    private async Task<IReadOnlyList<RelatedDocument>> SearchKnowledgeViaMcpAsync(
-        string query, string? category, CancellationToken cancellationToken)
-    {
-        try
-        {
-            var catalog = await _mcpLoader.LoadCatalogAsync(cancellationToken);
-            var toolName = catalog.Require("search_knowledge");
-            var args = new Dictionary<string, object?> { ["query"] = query };
-            if (!string.IsNullOrWhiteSpace(category) && category != SupportCategory.Other)
-                args["category"] = category;
-
-            var json = await _mcp.CallToolAsync(toolName, args, cancellationToken);
-            return McpKnowledgeParser.ParseSearchResults(json);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "MCP search_knowledge that bai.");
-            return [];
-        }
-    }
-
-    private async Task<ClassificationResult?> ClassifyCategoryDetailedAsync(string question, CancellationToken cancellationToken)
-    {
-        var keyword = TryKeywordClassify(question);
-
-        if (!_openAiOptions.Enabled || _chat is null)
-            return keyword is null ? null : new ClassificationResult(keyword, 0.75, "Keyword fallback");
-
-        var prompt = """
-            Phan loai cau hoi ho tro nhan vien vao mot trong: IT, HR, Finance, Other.
-            - IT: VPN, mat khau, phan mem, may tinh, email cong ty
-            - HR: nghi phep, luong, hop dong lao dong, phuc loi
-            - Finance: reimburse, chi phi, hoa don, thanh toan
-            - Other: khong ro
-
-            Chi tra ve JSON hop le, khong markdown:
-            {"category":"HR","confidence":0.9,"reason":"..."}
-
-            Cau hoi:
-            """ + question;
-
-        ChatMessageContent result;
-        try
-        {
-            result = await _chat.GetChatMessageContentAsync(prompt, cancellationToken: cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Azure OpenAI classify that bai; fallback keyword.");
-            return keyword is null ? null : new ClassificationResult(keyword, 0.75, "Keyword fallback (LLM error)");
-        }
-
-        var parsed = TryParseClassification(result.Content);
-        if (parsed is null)
-        {
-            _logger.LogDebug("Khong parse duoc classification JSON: {Content}", result.Content);
-            return keyword is null ? null : new ClassificationResult(keyword, 0.75, "Keyword fallback (parse error)");
-        }
-
-        if (parsed.Confidence < 0.5)
-            return keyword is null ? null : new ClassificationResult(keyword, 0.75, "Keyword fallback (low confidence)");
-
-        if (parsed.Category is SupportCategory.Other && keyword is not null)
-            return new ClassificationResult(keyword, Math.Max(parsed.Confidence, 0.75), parsed.Reason);
-
-        return parsed;
-    }
-
-    private async Task<string?> ClassifyCategoryAsync(string question, CancellationToken cancellationToken)
-    {
-        var parsed = await ClassifyCategoryDetailedAsync(question, cancellationToken);
-        return parsed?.Category ?? TryKeywordClassify(question) ?? SupportCategory.Other;
-    }
-
-    private static ClassificationResult? TryParseClassification(string? content)
-    {
-        if (string.IsNullOrWhiteSpace(content)) return null;
-
-        var json = content.Trim();
-        var match = Regex.Match(json, @"\{[\s\S]*\}");
-        if (match.Success)
-            json = match.Value;
-
-        try
-        {
-            var parsed = System.Text.Json.JsonSerializer.Deserialize<ClassificationResult>(
-                json,
-                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            if (parsed is null || string.IsNullOrWhiteSpace(parsed.Category)) return null;
-
-            var category = NormalizeCategory(parsed.Category);
-            if (category is null) return null;
-
-            return parsed with { Category = category };
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static string? NormalizeCategory(string raw)
-    {
-        var trimmed = raw.Trim();
-        foreach (var cat in SupportCategory.All)
-        {
-            if (string.Equals(trimmed, cat, StringComparison.OrdinalIgnoreCase))
-                return cat;
-        }
-
-        return trimmed.ToUpperInvariant() switch
-        {
-            "IT" => SupportCategory.IT,
-            "HR" => SupportCategory.HR,
-            "FINANCE" => SupportCategory.Finance,
-            "OTHER" => SupportCategory.Other,
-            _ => null
-        };
-    }
-
-    private static string? TryKeywordClassify(string question)
-    {
-        var q = question.ToLowerInvariant();
-        if (q.Contains("vpn") || q.Contains("mat khau") || q.Contains("phan mem") || q.Contains("may tinh") || q.Contains("email cong ty"))
-            return SupportCategory.IT;
-        if (q.Contains("nghi phep") || q.Contains("luong") || q.Contains("hop dong") || q.Contains("phuc loi") || q.Contains("onboarding"))
-            return SupportCategory.HR;
-        if (q.Contains("reimburse") || q.Contains("chi phi") || q.Contains("hoa don") || q.Contains("thanh toan"))
-            return SupportCategory.Finance;
-        return null;
-    }
-
-    private async Task<string> GenerateSuggestionAsync(string question, IReadOnlyList<RelatedDocument> related, CancellationToken cancellationToken)
-    {
-        if (!_openAiOptions.Enabled || _chat is null)
-        {
-            return BuildOfflineSuggestion(related);
-        }
-
-        var context = new StringBuilder();
-        if (related.Count == 0)
-        {
-            context.AppendLine("Khong tim thay tai lieu lien quan trong knowledge base.");
-        }
-        else
-        {
-            foreach (var doc in related)
-            {
-                context.AppendLine($"[DOC {doc.DocumentId}] {doc.Title} (score {doc.Score:F2})");
-                if (!string.IsNullOrWhiteSpace(doc.Content))
-                    context.AppendLine(doc.Content.Trim());
-                context.AppendLine();
-            }
-        }
-
-        var prompt = $"""
-            Ban la tro ly ho tro noi bo. Viet cau tra loi goi y cho support agent.
-            QUY TAC:
-            - Chi dung thong tin tu phan "Tai lieu noi bo" ben duoi.
-            - Neu co buoc xu ly trong tai lieu, liet ke ro rang (Buoc 1, Buoc 2...).
-            - Khong tu them chinh sach/buoc khong co trong tai lieu.
-            - Neu tai lieu khong du, noi ro can agent xu ly thu cong.
-
-            Cau hoi nhan vien: {question}
-
-            Tai lieu noi bo:
-            {context}
-            """;
-
-        try
-        {
-            var response = await _chat.GetChatMessageContentAsync(prompt, cancellationToken: cancellationToken);
-            return response.Content ?? "Khong tao duoc goi y.";
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Azure OpenAI suggestion that bai; dung fallback tu related docs.");
-            return BuildOfflineSuggestion(related);
-        }
+        var cat = await _pipeline.ClassifyAsync(question, cancellationToken);
+        return cat is null ? null : new ClassificationResult(cat, 0.8, "Pipeline classify");
     }
 
     private async Task<string> OfflineChatAsync(string message, CancellationToken cancellationToken)
@@ -382,28 +108,4 @@ public sealed class TicketSuggestionService
 
         return "Azure OpenAI chua san sang. Fallback local chi ho tro hoi trang thai ticket theo ma TCK-xxx.";
     }
-
-    private static string BuildOfflineSuggestion(IReadOnlyList<RelatedDocument> related)
-    {
-        if (related.Count == 0)
-            return "Chua goi duoc Azure OpenAI. Khong du thong tin de goi y - can support agent xu ly.";
-
-        var first = related[0];
-        var basis = string.IsNullOrWhiteSpace(first.Content)
-            ? first.Title
-            : first.Content.Trim();
-        if (basis.Length > 700)
-            basis = basis[..700] + "...";
-
-        return $"""
-            [Offline] Tim thay {related.Count} tai lieu lien quan. Azure OpenAI chua san sang nen day la goi y fallback cho agent kiem tra:
-
-            Tai lieu chinh: {first.Title}
-            Noi dung lien quan: {basis}
-
-            Agent nen doi chieu tai lieu noi bo truoc khi resolve ticket.
-            """;
-    }
 }
-
-public sealed record ClassificationResult(string Category, double Confidence, string Reason);

@@ -1,13 +1,13 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using MassTransit;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using SupportPoc.KnowledgeService.Data;
 using SupportPoc.KnowledgeService.Options;
 using SupportPoc.KnowledgeService.Search;
 using SupportPoc.KnowledgeService.Services;
-using SupportPoc.Shared.Events;
 using SupportPoc.Shared.Messaging;
 using SupportPoc.Shared.Models;
 
@@ -17,7 +17,6 @@ builder.Services.Configure<AzureSearchOptions>(builder.Configuration.GetSection(
 builder.Services.Configure<AzureOpenAIOptions>(builder.Configuration.GetSection(AzureOpenAIOptions.SectionName));
 builder.Services.Configure<AzureStorageOptions>(builder.Configuration.GetSection(AzureStorageOptions.SectionName));
 builder.Services.Configure<ServiceBusOptions>(builder.Configuration.GetSection(ServiceBusOptions.SectionName));
-builder.Services.AddSingleton<ISupportEventPublisher, ServiceBusEventPublisher>();
 builder.Services.AddSingleton<ReindexState>();
 builder.Services.AddSingleton<KnowledgeSearchService>();
 builder.Services.AddSingleton<EmbeddingService>();
@@ -26,6 +25,24 @@ builder.Services.AddDbContext<KnowledgeDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("Knowledge") ?? "Data Source=knowledge.db"));
 builder.Services.AddCors(options =>
     options.AddDefaultPolicy(p => p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
+
+// ---------- MassTransit (publish-only - KnowledgeService khong tham gia saga) ----------
+var serviceBus = builder.Configuration.GetSection(ServiceBusOptions.SectionName).Get<ServiceBusOptions>() ?? new ServiceBusOptions();
+builder.Services.AddMassTransit(mt =>
+{
+    if (serviceBus.Enabled)
+    {
+        mt.UsingAzureServiceBus((ctx, cfg) =>
+        {
+            cfg.Host(serviceBus.ConnectionString);
+            cfg.ConfigureEndpoints(ctx);
+        });
+    }
+    else
+    {
+        mt.UsingInMemory((ctx, cfg) => cfg.ConfigureEndpoints(ctx));
+    }
+});
 
 var app = builder.Build();
 app.UseCors();
@@ -85,7 +102,7 @@ app.MapPost("/documents", async (
     CreateDocumentRequest request,
     KnowledgeDbContext db,
     DocumentBlobStore blobStore,
-    ISupportEventPublisher publisher,
+    IPublishEndpoint publish,
     CancellationToken cancellationToken) =>
 {
     if (string.IsNullOrWhiteSpace(request.Title) || string.IsNullOrWhiteSpace(request.Content))
@@ -108,7 +125,14 @@ app.MapPost("/documents", async (
 
     db.Documents.Add(entity);
     await db.SaveChangesAsync();
-    await TryPublishAsync(app.Logger, publisher, SupportEventTypes.KnowledgeDocumentUploaded, new { documentId = entity.Id }, cancellationToken);
+    try
+    {
+        await publish.Publish(new KnowledgeDocumentUploaded(entity.Id), cancellationToken);
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogWarning(ex, "Publish KnowledgeDocumentUploaded that bai; tiep tuc local flow.");
+    }
     return Results.Created($"/documents/{entity.Id}", ToDto(entity));
 });
 
@@ -120,7 +144,7 @@ app.MapPost("/documents/reindex", async (
     KnowledgeSearchService search,
     EmbeddingService embeddings,
     ReindexState state,
-    ISupportEventPublisher publisher) =>
+    IPublishEndpoint publish) =>
 {
     const string scope = "POST /documents/reindex";
     var idempotencyKey = ReadIdempotencyKey(httpContext);
@@ -153,7 +177,14 @@ app.MapPost("/documents/reindex", async (
         }
         await search.UpsertDocumentsAsync(batch);
         state.Set("Completed");
-        await TryPublishAsync(app.Logger, publisher, SupportEventTypes.KnowledgeIndexUpdated, new { documentCount = docs.Count });
+        try
+        {
+            await publish.Publish(new KnowledgeIndexUpdated(docs.Count));
+        }
+        catch (Exception ex)
+        {
+            app.Logger.LogWarning(ex, "Publish KnowledgeIndexUpdated that bai; tiep tuc local flow.");
+        }
         var response = new { status = "Completed", documentCount = docs.Count };
         if (!string.IsNullOrWhiteSpace(idempotencyKey))
         {
@@ -246,25 +277,6 @@ app.MapGet("/debug/idempotency", async (KnowledgeDbContext db) =>
 
 app.Run();
 
-static async Task<bool> TryPublishAsync<TPayload>(
-    ILogger logger,
-    ISupportEventPublisher publisher,
-    string eventType,
-    TPayload payload,
-    CancellationToken cancellationToken = default)
-{
-    try
-    {
-        await publisher.PublishAsync(eventType, payload, cancellationToken);
-        return true;
-    }
-    catch (Exception ex)
-    {
-        logger.LogWarning(ex, "Publish event {EventType} that bai; tiep tuc local flow.", eventType);
-        return false;
-    }
-}
-
 static double ScoreLocalHit(KnowledgeDocumentEntity doc, string query, IReadOnlyList<string> terms)
 {
     var title = doc.Title ?? "";
@@ -315,3 +327,7 @@ static string HashIdempotency(string scope, string payload)
 }
 
 public sealed record CreateDocumentRequest(string Title, string Category, string Content, string? SourceUrl);
+
+// Knowledge-domain events - khong tham gia saga, chi broadcast cho subscriber khac (vd. analytics).
+public sealed record KnowledgeDocumentUploaded(string DocumentId);
+public sealed record KnowledgeIndexUpdated(int DocumentCount);

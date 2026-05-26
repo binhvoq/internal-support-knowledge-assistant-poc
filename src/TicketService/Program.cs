@@ -1,23 +1,57 @@
 using System.Text.Json;
+using MassTransit;
+using MassTransit.EntityFrameworkCoreIntegration;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
-using SupportPoc.Shared.Events;
+using SupportPoc.Shared.Contracts;
 using SupportPoc.Shared.Messaging;
 using SupportPoc.Shared.Models;
+using SupportPoc.TicketService.Consumers;
 using SupportPoc.TicketService.Data;
 using SupportPoc.TicketService.Services;
-using SupportPoc.TicketService.Workers;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.Configure<ServiceBusOptions>(builder.Configuration.GetSection(ServiceBusOptions.SectionName));
-builder.Services.AddSingleton<ISupportEventPublisher, ServiceBusEventPublisher>();
-builder.Services.AddHttpClient<AiOrchestratorNotifier>();
-builder.Services.AddHostedService<OutboxPublisherWorker>();
 builder.Services.AddDbContext<TicketDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("Tickets") ?? "Data Source=tickets.db"));
 builder.Services.AddCors(options =>
     options.AddDefaultPolicy(p => p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
+
+// ---------- MassTransit ----------
+var serviceBus = builder.Configuration.GetSection(ServiceBusOptions.SectionName).Get<ServiceBusOptions>() ?? new ServiceBusOptions();
+
+builder.Services.AddMassTransit(mt =>
+{
+    mt.AddConsumer<MarkTicketAnalyzingConsumer, MarkTicketAnalyzingConsumerDefinition>();
+    mt.AddConsumer<SaveTicketSuggestionConsumer, SaveTicketSuggestionConsumerDefinition>();
+    mt.AddConsumer<CompensateMarkAnalyzingConsumer, CompensateMarkAnalyzingConsumerDefinition>();
+
+    // Transactional Outbox: HTTP POST /tickets se Publish ITicketCreated qua outbox
+    // -> ghi cung transaction voi TicketEntity -> khong con dual-write.
+    mt.AddEntityFrameworkOutbox<TicketDbContext>(o =>
+    {
+        o.UseSqlite();
+        o.UseBusOutbox();
+        o.DuplicateDetectionWindow = TimeSpan.FromHours(1);
+    });
+
+    if (serviceBus.Enabled)
+    {
+        mt.UsingAzureServiceBus((ctx, cfg) =>
+        {
+            cfg.Host(serviceBus.ConnectionString);
+            cfg.UseServiceBusMessageScheduler();
+            cfg.ConfigureEndpoints(ctx);
+        });
+    }
+    else
+    {
+        mt.UsingInMemory((ctx, cfg) =>
+        {
+            cfg.ConfigureEndpoints(ctx);
+        });
+    }
+});
 
 var app = builder.Build();
 app.UseCors();
@@ -26,53 +60,45 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<TicketDbContext>();
     await db.Database.EnsureCreatedAsync();
-    await db.Database.ExecuteSqlRawAsync("""
-        CREATE TABLE IF NOT EXISTS OutboxMessages (
-            Id TEXT NOT NULL CONSTRAINT PK_OutboxMessages PRIMARY KEY,
-            EventId TEXT NOT NULL,
-            EventType TEXT NOT NULL,
-            PayloadJson TEXT NOT NULL,
-            Status TEXT NOT NULL,
-            Error TEXT NULL,
-            CreatedAt TEXT NOT NULL,
-            PublishedAt TEXT NULL
-        );
-        """);
-    await db.Database.ExecuteSqlRawAsync("""
-        CREATE UNIQUE INDEX IF NOT EXISTS IX_OutboxMessages_EventId ON OutboxMessages (EventId);
-        """);
-    await db.Database.ExecuteSqlRawAsync("""
-        CREATE TABLE IF NOT EXISTS IdempotencyRecords (
-            Key TEXT NOT NULL,
-            Scope TEXT NOT NULL,
-            RequestHash TEXT NOT NULL,
-            ResponseJson TEXT NOT NULL,
-            StatusCode INTEGER NOT NULL,
-            CreatedAt TEXT NOT NULL,
-            CONSTRAINT PK_IdempotencyRecords PRIMARY KEY (Scope, Key)
-        );
-        """);
+    // IdempotencyRecords + Ticket + MassTransit Outbox/Inbox tables tu sinh.
 }
 
 var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "ticket-service" }));
 
+// /debug/outbox query bang OutboxMessage cua MassTransit thay vi bang custom cu.
 app.MapGet("/debug/outbox", async (TicketDbContext db) =>
 {
-    var items = (await db.OutboxMessages
-        .ToListAsync())
-        .OrderByDescending(x => x.CreatedAt)
+    var items = await db.Set<OutboxMessage>()
+        .OrderByDescending(x => x.SequenceNumber)
         .Take(50)
-        .Select(x => new { x.EventId, x.EventType, x.Status, x.CreatedAt, x.PublishedAt, x.Error })
-        .ToList();
+        .Select(x => new
+        {
+            x.SequenceNumber,
+            x.MessageId,
+            x.EnqueueTime,
+            x.SentTime,
+            x.ContentType,
+            x.MessageType
+        })
+        .ToListAsync();
+    return Results.Ok(items);
+});
+
+app.MapGet("/debug/inbox", async (TicketDbContext db) =>
+{
+    var items = await db.Set<InboxState>()
+        .OrderByDescending(x => x.Received)
+        .Take(50)
+        .Select(x => new { x.MessageId, x.ConsumerId, x.Received, x.Consumed, x.ReceiveCount })
+        .ToListAsync();
     return Results.Ok(items);
 });
 
 app.MapGet("/debug/idempotency", async (TicketDbContext db) =>
 {
-    var items = (await db.IdempotencyRecords
-        .ToListAsync())
+    var items = (await db.IdempotencyRecords.ToListAsync())
         .OrderByDescending(x => x.CreatedAt)
         .Take(50)
         .Select(x => new { x.Scope, x.Key, x.RequestHash, x.StatusCode, x.CreatedAt })
@@ -84,8 +110,7 @@ app.MapPost("/tickets", async (
     CreateTicketRequest request,
     HttpContext httpContext,
     TicketDbContext db,
-    AiOrchestratorNotifier aiNotifier,
-    IOptions<ServiceBusOptions> busOptions) =>
+    IPublishEndpoint publish) =>
 {
     if (string.IsNullOrWhiteSpace(request.EmployeeId) || string.IsNullOrWhiteSpace(request.Question))
         return Results.BadRequest(new { error = "employeeId va question la bat buoc." });
@@ -100,7 +125,6 @@ app.MapPost("/tickets", async (
         {
             if (existing.RequestHash != requestHash)
                 return Results.Conflict(new { error = "Idempotency-Key da duoc dung voi payload khac." });
-            app.Logger.LogInformation("Idempotency replay {Scope} Key={Key}", scope, idempotencyKey);
             return IdempotencyHelper.Replay(existing);
         }
     }
@@ -120,7 +144,18 @@ app.MapPost("/tickets", async (
     };
 
     db.Tickets.Add(entity);
-    db.OutboxMessages.Add(OutboxFactory.Create(SupportEventTypes.TicketCreated, new TicketCreatedPayload { TicketId = entity.Id }));
+
+    // Publish event qua outbox - MassTransit se INSERT vao bang OutboxMessage
+    // cung transaction voi Ticket. Khi SaveChanges commit, bus outbox relay
+    // se pickup va gui len Service Bus. Atomic.
+    var correlationId = Guid.NewGuid();
+    await publish.Publish<ITicketCreated>(new TicketCreated(
+        correlationId,
+        entity.Id,
+        entity.EmployeeId,
+        entity.Question,
+        entity.Category));
+
     var dto = TicketMapper.ToDto(entity);
     if (!string.IsNullOrWhiteSpace(idempotencyKey))
     {
@@ -136,8 +171,6 @@ app.MapPost("/tickets", async (
     }
 
     await db.SaveChangesAsync();
-    if (!busOptions.Value.Enabled)
-        _ = aiNotifier.NotifyTicketCreatedAsync(entity.Id);
 
     return Results.Created($"/tickets/{entity.Id}", dto);
 });
@@ -160,29 +193,6 @@ app.MapGet("/tickets/{id}", async (string id, TicketDbContext db) =>
     return entity is null ? Results.NotFound() : Results.Ok(TicketMapper.ToDto(entity));
 });
 
-app.MapPatch("/tickets/{id}", async (string id, UpdateTicketRequest request, TicketDbContext db) =>
-{
-    var entity = await db.Tickets.FindAsync(id);
-    if (entity is null) return Results.NotFound();
-
-    if (!string.IsNullOrWhiteSpace(request.Status))
-        entity.Status = request.Status;
-    if (request.AiSuggestedAnswer is not null)
-        entity.AiSuggestedAnswer = request.AiSuggestedAnswer;
-    if (request.FinalAnswer is not null)
-        entity.FinalAnswer = request.FinalAnswer;
-    if (request.Category is not null)
-        entity.Category = request.Category;
-    if (request.RelatedDocuments is not null)
-        entity.RelatedDocumentsJson = JsonSerializer.Serialize(request.RelatedDocuments, jsonOptions);
-
-    entity.UpdatedAt = DateTimeOffset.UtcNow;
-    db.OutboxMessages.Add(OutboxFactory.Create(SupportEventTypes.TicketUpdated, new { ticketId = id }));
-    await db.SaveChangesAsync();
-
-    return Results.Ok(TicketMapper.ToDto(entity));
-});
-
 app.MapPost("/tickets/{id}/resolve", async (string id, ResolveTicketRequest request, HttpContext httpContext, TicketDbContext db) =>
 {
     var entity = await db.Tickets.FindAsync(id);
@@ -201,7 +211,6 @@ app.MapPost("/tickets/{id}/resolve", async (string id, ResolveTicketRequest requ
         {
             if (existing.RequestHash != requestHash)
                 return Results.Conflict(new { error = "Idempotency-Key da duoc dung voi payload khac." });
-            app.Logger.LogInformation("Idempotency replay {Scope} Key={Key}", scope, idempotencyKey);
             return IdempotencyHelper.Replay(existing);
         }
     }
@@ -209,7 +218,7 @@ app.MapPost("/tickets/{id}/resolve", async (string id, ResolveTicketRequest requ
     entity.Status = TicketStatus.Resolved;
     entity.FinalAnswer = request.FinalAnswer.Trim();
     entity.UpdatedAt = DateTimeOffset.UtcNow;
-    db.OutboxMessages.Add(OutboxFactory.Create(SupportEventTypes.TicketResolved, new TicketResolvedPayload { TicketId = id }));
+
     var dto = TicketMapper.ToDto(entity);
     if (!string.IsNullOrWhiteSpace(idempotencyKey))
     {
@@ -236,7 +245,6 @@ app.MapPost("/tickets/{id}/reopen", async (string id, TicketDbContext db) =>
 
     entity.Status = TicketStatus.Reopened;
     entity.UpdatedAt = DateTimeOffset.UtcNow;
-    db.OutboxMessages.Add(OutboxFactory.Create(SupportEventTypes.TicketUpdated, new { ticketId = id, status = TicketStatus.Reopened }));
     await db.SaveChangesAsync();
     return Results.Ok(TicketMapper.ToDto(entity));
 });
@@ -244,10 +252,4 @@ app.MapPost("/tickets/{id}/reopen", async (string id, TicketDbContext db) =>
 app.Run();
 
 public sealed record CreateTicketRequest(string EmployeeId, string Question, string? Category);
-public sealed record UpdateTicketRequest(
-    string? Status,
-    string? AiSuggestedAnswer,
-    string? FinalAnswer,
-    string? Category,
-    IReadOnlyList<RelatedDocument>? RelatedDocuments);
 public sealed record ResolveTicketRequest(string? FinalAnswer);

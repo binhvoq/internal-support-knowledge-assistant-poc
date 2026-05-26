@@ -1,3 +1,4 @@
+using MassTransit;
 using Microsoft.EntityFrameworkCore;
 
 namespace SupportPoc.TicketService.Data;
@@ -5,26 +6,22 @@ namespace SupportPoc.TicketService.Data;
 public sealed class TicketDbContext(DbContextOptions<TicketDbContext> options) : DbContext(options)
 {
     public DbSet<TicketEntity> Tickets => Set<TicketEntity>();
-    public DbSet<OutboxMessageEntity> OutboxMessages => Set<OutboxMessageEntity>();
+    // Idempotency cap HTTP - khac voi message inbox (do MassTransit quan ly).
     public DbSet<IdempotencyRecordEntity> IdempotencyRecords => Set<IdempotencyRecordEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        // 3 bang cua MassTransit: Inbox/Outbox/OutboxState.
+        modelBuilder.AddInboxStateEntity();
+        modelBuilder.AddOutboxMessageEntity();
+        modelBuilder.AddOutboxStateEntity();
+
         modelBuilder.Entity<TicketEntity>(entity =>
         {
             entity.HasKey(x => x.Id);
             entity.Property(x => x.Id).HasMaxLength(32);
             entity.Property(x => x.EmployeeId).HasMaxLength(64);
             entity.Property(x => x.Category).HasMaxLength(32);
-            entity.Property(x => x.Status).HasMaxLength(32);
-        });
-
-        modelBuilder.Entity<OutboxMessageEntity>(entity =>
-        {
-            entity.HasKey(x => x.Id);
-            entity.HasIndex(x => x.EventId).IsUnique();
-            entity.Property(x => x.EventId).HasMaxLength(64);
-            entity.Property(x => x.EventType).HasMaxLength(128);
             entity.Property(x => x.Status).HasMaxLength(32);
         });
 

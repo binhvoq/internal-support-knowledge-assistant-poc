@@ -11,7 +11,7 @@ BUS_NAMESPACE=$(az servicebus namespace list -g "$RG" --query "[0].name" -o tsv 
 SEARCH_NAME=$(az search service list -g "$RG" --query "[0].name" -o tsv | tr -d '\r')
 OPENAI_EMBED=$(az cognitiveservices account list -g "$RG" --query "[?kind=='OpenAI'] | [0].name" -o tsv | tr -d '\r')
 OPENAI_CHAT=$(az cognitiveservices account list -g "$RG" --query "[?kind=='OpenAI'] | [-1].name" -o tsv | tr -d '\r')
-CHAT_DEPLOYMENT="${CHAT_DEPLOYMENT:-gpt-4.1-mini}"
+CHAT_DEPLOYMENT="${CHAT_DEPLOYMENT:-gpt-4o-mini}"
 
 [[ -z "$STORAGE_NAME" || -z "$BUS_NAMESPACE" || -z "$SEARCH_NAME" ]] && {
   echo "Thieu Storage/Service Bus/Search trong RG. Chay scripts/provision-azure.sh truoc."
