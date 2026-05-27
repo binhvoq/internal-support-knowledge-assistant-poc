@@ -7,6 +7,8 @@ namespace SupportPoc.TicketService.Consumers;
 
 // Compensating transaction: revert ticket ve OriginalStatus (truoc khi MarkAnalyzing).
 // QUAN TRONG: compensation phai idempotent - co the chay nhieu lan an toan.
+// Nghiep vu moi: neu saga fail/timeout thi PHAI rollback 100% ve state ban dau,
+// ke ca truong hop da save AI suggestion (khong con "semantic skip").
 public sealed class CompensateMarkAnalyzingConsumer : IConsumer<ICompensateMarkAnalyzing>
 {
     private readonly TicketDbContext _db;
@@ -25,25 +27,28 @@ public sealed class CompensateMarkAnalyzingConsumer : IConsumer<ICompensateMarkA
 
         if (ticket is null)
         {
-            // Khong co gi de compensate -> coi nhu success (semantic rollback voi state khong ton tai = no-op).
+            // Ticket khong ton tai -> coi nhu da rollback xong (idempotent).
             _logger.LogWarning("Compensate: ticket khong ton tai. TicketId={TicketId}", msg.TicketId);
             await context.Publish<IMarkAnalyzingReverted>(new MarkAnalyzingReverted(msg.CorrelationId, msg.TicketId));
             return;
         }
 
-        // Chi revert khi ticket dang Analyzing va chua co AI suggestion.
-        // Neu da Suggested/Resolved -> KHONG revert (semantic correctness:
-        // saga compensate khong duoc xoa cong viec da hoan thanh).
-        if (ticket.Status == TicketStatus.Analyzing && string.IsNullOrWhiteSpace(ticket.AiSuggestedAnswer))
-        {
-            ticket.Status = string.IsNullOrWhiteSpace(msg.OriginalStatus) ? TicketStatus.New : msg.OriginalStatus;
-            ticket.UpdatedAt = DateTimeOffset.UtcNow;
-            _logger.LogInformation("Compensated TicketId={TicketId} back to {Status}", msg.TicketId, ticket.Status);
-        }
-        else
-        {
-            _logger.LogInformation("Compensate skip - ticket {TicketId} state={Status} (no rollback needed).", msg.TicketId, ticket.Status);
-        }
+        // Rollback 100% ve state ban dau:
+        // - Status ve OriginalStatus (default New neu OriginalStatus rong)
+        // - Xoa du lieu AI (neu da save) de tranh "compensated nhung ticket van Suggested"
+        var oldStatus = ticket.Status;
+        var targetStatus = string.IsNullOrWhiteSpace(msg.OriginalStatus) ? TicketStatus.New : msg.OriginalStatus;
+        ticket.Status = targetStatus;
+        ticket.Category = string.Empty;
+        ticket.AiSuggestedAnswer = null;
+        ticket.RelatedDocumentsJson = "[]";
+        ticket.UpdatedAt = DateTimeOffset.UtcNow;
+
+        _logger.LogInformation(
+            "Compensated TicketId={TicketId}: status={OldStatus} -> {NewStatus} (AI fields cleared)",
+            msg.TicketId,
+            oldStatus,
+            targetStatus);
 
         await context.Publish<IMarkAnalyzingReverted>(new MarkAnalyzingReverted(msg.CorrelationId, msg.TicketId));
         await _db.SaveChangesAsync(context.CancellationToken);

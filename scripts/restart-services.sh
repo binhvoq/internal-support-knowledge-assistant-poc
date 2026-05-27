@@ -25,9 +25,9 @@ for spec in TicketService:5001 KnowledgeService:5002 AiOrchestrator:5003 McpTool
   port="${spec##*:}"
   log=".logs/${name}.log"
   if command -v nohup >/dev/null 2>&1; then
-    nohup "$DOTNET" run --project "src/$name" --urls "http://localhost:$port" --no-build >"$log" 2>&1 &
+    nohup env ASPNETCORE_ENVIRONMENT=Development "$DOTNET" run --project "src/$name" --urls "http://localhost:$port" --no-build >"$log" 2>&1 &
   else
-    "$DOTNET" run --project "src/$name" --urls "http://localhost:$port" --no-build >"$log" 2>&1 &
+    env ASPNETCORE_ENVIRONMENT=Development "$DOTNET" run --project "src/$name" --urls "http://localhost:$port" --no-build >"$log" 2>&1 &
   fi
 done
 

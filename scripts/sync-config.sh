@@ -70,6 +70,53 @@ write("src/TicketService/appsettings.Development.json", ticket)
 write("src/KnowledgeService/appsettings.Development.json", knowledge)
 write("src/AiOrchestrator/appsettings.Development.json", orchestrator)
 write("src/McpToolServer/appsettings.Development.json", mcp)
+
+# User Secrets override appsettings.Development.json — sync tu cung azure.local.json.
+import subprocess
+
+def sync_secrets(rel_project: str, pairs: dict[str, str]) -> None:
+    project = root / rel_project
+    if not project.exists():
+        return
+    for key, value in pairs.items():
+        subprocess.run(
+            ["dotnet", "user-secrets", "set", key, value],
+            cwd=project,
+            check=True,
+            capture_output=True,
+        )
+    print(f"  -> user-secrets {rel_project}")
+
+bus = cfg["serviceBus"]["connectionString"]
+search = cfg["azureSearch"]
+storage = cfg.get("storage", {}).get("connectionString", "")
+oai = cfg["azureOpenAI"]
+chat_ep = oai.get("chatEndpoint", oai["endpoint"])
+chat_key = oai.get("chatApiKey", oai["apiKey"])
+
+sync_secrets("src/TicketService", {
+    "ServiceBus:Enabled": "true",
+    "ServiceBus:ConnectionString": bus,
+})
+sync_secrets("src/KnowledgeService", {
+    "ServiceBus:Enabled": "true",
+    "ServiceBus:ConnectionString": bus,
+    "AzureSearch:Endpoint": search["endpoint"],
+    "AzureSearch:ApiKey": search["apiKey"],
+    "AzureStorage:ConnectionString": storage,
+    "AzureOpenAI:Enabled": "true",
+    "AzureOpenAI:Endpoint": oai["endpoint"],
+    "AzureOpenAI:ApiKey": oai["apiKey"],
+})
+sync_secrets("src/AiOrchestrator", {
+    "ServiceBus:Enabled": "true",
+    "ServiceBus:ConnectionString": bus,
+    "AzureOpenAI:Enabled": "true",
+    "AzureOpenAI:Endpoint": oai["endpoint"],
+    "AzureOpenAI:ApiKey": oai["apiKey"],
+    "AzureOpenAI:ChatEndpoint": chat_ep,
+    "AzureOpenAI:ChatApiKey": chat_key,
+})
 PY
 
-echo "Da dong bo appsettings.Development.json cho 4 services."
+echo "Da dong bo appsettings.Development.json + user-secrets cho 3 backend co UserSecretsId."

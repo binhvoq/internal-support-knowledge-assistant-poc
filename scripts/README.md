@@ -30,7 +30,7 @@ PoC nay la **Internal Support Knowledge Assistant**: employee tao support ticket
 |--------|----------|--------------|
 | [`provision-azure.sh`](provision-azure.sh) | Tao moi Azure Resource Group, Storage, Service Bus, AI Search, Azure OpenAI, ghi `config/azure.local.json`, sync appsettings. | Lan dau tao Azure resources hoac can provision lai tu dau. |
 | [`refresh-azure-config.sh`](refresh-azure-config.sh) | Doc resources dang co trong RG va ghi lai config local. | RG da ton tai, can cap nhat key/endpoint vao local. |
-| [`sync-config.sh`](sync-config.sh) | Dong bo `config/azure.local.json` sang `src/*/appsettings.Development.json`. | Da co config local va chi can apply vao services. |
+| [`sync-config.sh`](sync-config.sh) | Dong bo `config/azure.local.json` sang `src/*/appsettings.Development.json` **va dotnet user-secrets** (tranh stale override). | Da co config local va chi can apply vao services. |
 | [`azure-resources-stop.sh`](azure-resources-stop.sh) | Luu state resource roi xoa RG de giam chi phi. | Khi dung PoC xong va muon tat Azure resources ton phi. |
 | [`azure-resources-start.sh`](azure-resources-start.sh) | Bat lai resources: refresh neu RG con ton tai, provision neu RG da bi xoa. | Khi muon chay lai PoC sau khi stop. |
 | [`restart-services.sh`](restart-services.sh) | Build va restart 4 backend local tren ports 5001-5004. | Sau khi sync config hoac sua backend. |
