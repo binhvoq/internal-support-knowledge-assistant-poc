@@ -100,6 +100,8 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                     ctx.Saga.TicketSagaEpoch = ctx.Message.SagaEpoch;
                     ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
                 })
+                .Unschedule(StepTimeout)
+                .Schedule(StepTimeout, ctx => new SagaTimeoutExpired(ctx.Saga.CorrelationId, ctx.Saga.TicketId))
                 .Send(ctx => new RunAiPipeline(
                     ctx.Saga.CorrelationId,
                     ctx.Saga.TicketId,
@@ -137,6 +139,8 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                     ctx.Saga.RelatedDocumentsJson = JsonSerializer.Serialize(ctx.Message.RelatedDocuments);
                     ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
                 })
+                .Unschedule(StepTimeout)
+                .Schedule(StepTimeout, ctx => new SagaTimeoutExpired(ctx.Saga.CorrelationId, ctx.Saga.TicketId))
                 .Send(ctx => new SaveTicketSuggestion(
                     ctx.Saga.CorrelationId,
                     ctx.Saga.TicketId,
@@ -152,6 +156,7 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                     ctx.Saga.CompensationReason = ctx.Message.Reason;
                     ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
                 })
+                .Unschedule(StepTimeout)
                 .Send(ctx => new CompensateMarkAnalyzing(
                     ctx.Saga.CorrelationId,
                     ctx.Saga.TicketId,
