@@ -44,16 +44,13 @@ public sealed class MarkTicketAnalyzingConsumer : IConsumer<IMarkTicketAnalyzing
         // FAULT INJECTION (timeout verify): silent return - khong publish event nao.
         if (ticket.Question.Has(FaultInjection.ForceSkipMarkAnalyzing))
         {
-            ticket.Status = TicketStatus.Analyzing;
-            ticket.ActiveSagaCorrelationId = msg.CorrelationId;
-            ticket.SagaEpoch = msg.ExpectedEpoch + 1;
-            ticket.UpdatedAt = DateTimeOffset.UtcNow;
+            MarkAnalyzingForSaga(ticket, msg);
             await _db.SaveChangesAsync(context.CancellationToken);
             _logger.LogWarning("FaultInjection: ForceSkipMarkAnalyzing -> skip publishing event for TicketId={TicketId}", msg.TicketId);
             return;
         }
 
-        if (ticket.ActiveSagaCorrelationId == msg.CorrelationId &&
+        if (IsOwnedBySaga(ticket, msg) &&
             ticket.Status is TicketStatus.Analyzing or TicketStatus.Suggested or TicketStatus.Resolved)
         {
             _logger.LogInformation("Ticket {TicketId} da {Status} (cung saga) - idempotent MarkAnalyzing.", msg.TicketId, ticket.Status);
@@ -65,21 +62,20 @@ public sealed class MarkTicketAnalyzingConsumer : IConsumer<IMarkTicketAnalyzing
 
         if (ticket.Status is TicketStatus.Suggested or TicketStatus.Resolved)
         {
-            _logger.LogInformation("Ticket {TicketId} da {Status} - bo qua MarkAnalyzing.", msg.TicketId, ticket.Status);
-            await context.Publish<ITicketAnalyzingMarked>(new TicketAnalyzingMarked(
-                msg.CorrelationId, msg.TicketId, ticket.SagaEpoch));
+            // Terminal tickets are idempotent success only for the saga that already owns them.
+            _logger.LogWarning(
+                "MarkAnalyzing fail - ticket da {Status} nhung khong thuoc saga hien tai. TicketId={TicketId} ActiveSaga={ActiveSaga} MsgSaga={MsgSaga}",
+                ticket.Status,
+                msg.TicketId,
+                ticket.ActiveSagaCorrelationId,
+                msg.CorrelationId);
+            await context.Publish<ITicketAnalyzingMarkFailed>(new TicketAnalyzingMarkFailed(
+                msg.CorrelationId, msg.TicketId, $"Ticket is already {ticket.Status}"));
             await _db.SaveChangesAsync(context.CancellationToken);
             return;
         }
 
-        if (ticket.Status is not TicketStatus.Analyzing)
-        {
-            ticket.Status = TicketStatus.Analyzing;
-            ticket.UpdatedAt = DateTimeOffset.UtcNow;
-        }
-
-        ticket.ActiveSagaCorrelationId = msg.CorrelationId;
-        ticket.SagaEpoch = msg.ExpectedEpoch + 1;
+        MarkAnalyzingForSaga(ticket, msg);
 
         var markedEpoch = ticket.SagaEpoch;
         await context.Publish<ITicketAnalyzingMarked>(new TicketAnalyzingMarked(
@@ -96,6 +92,22 @@ public sealed class MarkTicketAnalyzingConsumer : IConsumer<IMarkTicketAnalyzing
         }
 
         _logger.LogInformation("MarkAnalyzing OK TicketId={TicketId} SagaId={SagaId} Epoch={Epoch}", msg.TicketId, msg.CorrelationId, markedEpoch);
+    }
+
+    private static bool IsOwnedBySaga(TicketEntity ticket, IMarkTicketAnalyzing msg) =>
+        ticket.ActiveSagaCorrelationId == msg.CorrelationId &&
+        ticket.SagaEpoch == msg.ExpectedEpoch;
+
+    private static void MarkAnalyzingForSaga(TicketEntity ticket, IMarkTicketAnalyzing msg)
+    {
+        if (ticket.Status is not TicketStatus.Analyzing)
+        {
+            ticket.Status = TicketStatus.Analyzing;
+        }
+
+        ticket.ActiveSagaCorrelationId = msg.CorrelationId;
+        ticket.SagaEpoch = msg.ExpectedEpoch + 1;
+        ticket.UpdatedAt = DateTimeOffset.UtcNow;
     }
 }
 
