@@ -23,6 +23,7 @@ public sealed class TicketDbContext(DbContextOptions<TicketDbContext> options) :
             entity.Property(x => x.EmployeeId).HasMaxLength(64);
             entity.Property(x => x.Category).HasMaxLength(32);
             entity.Property(x => x.Status).HasMaxLength(32);
+            entity.Property(x => x.SagaEpoch).HasDefaultValue(0).IsConcurrencyToken();
         });
 
         modelBuilder.Entity<IdempotencyRecordEntity>(entity =>

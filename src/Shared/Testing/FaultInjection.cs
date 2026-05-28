@@ -19,6 +19,10 @@ public static class FaultInjection
     // -> Timeout fire -> saga sang Failed.
     public const string ForceSkipMarkAnalyzing = "__SKIP_MARK__";
 
+    // SaveTicketSuggestionConsumer commit DB Suggested nhung KHONG publish TicketSuggestionSaved.
+    // Dung de verify Saving-timeout suspect path: orchestrator phai probe source-of-truth, khong compensate mu.
+    public const string ForceSkipSaveSuggestionEvent = "__SKIP_SAVE_EVENT__";
+
     public static bool Has(this string? text, string marker)
         => !string.IsNullOrEmpty(text) && text.Contains(marker, StringComparison.OrdinalIgnoreCase);
 }

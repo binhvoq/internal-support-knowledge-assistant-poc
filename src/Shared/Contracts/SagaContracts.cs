@@ -17,6 +17,7 @@ public interface ITicketCreated
     string EmployeeId { get; }
     string Question { get; }
     string Category { get; }
+    int SagaEpoch { get; }
 }
 
 // TicketService publish sau khi xu ly Cmd.MarkTicketAnalyzing thanh cong.
@@ -24,6 +25,7 @@ public interface ITicketAnalyzingMarked
 {
     Guid CorrelationId { get; }
     string TicketId { get; }
+    int SagaEpoch { get; }
 }
 
 // TicketService publish khi Cmd.MarkTicketAnalyzing fail (ticket khong ton tai, sai state...).
@@ -72,12 +74,14 @@ public interface IMarkTicketAnalyzing
 {
     Guid CorrelationId { get; }
     string TicketId { get; }
+    int ExpectedEpoch { get; }
 }
 
 public interface ISaveTicketSuggestion
 {
     Guid CorrelationId { get; }
     string TicketId { get; }
+    int ExpectedEpoch { get; }
     string Category { get; }
     string Suggestion { get; }
     IReadOnlyList<RelatedDocument> RelatedDocuments { get; }
@@ -130,21 +134,28 @@ public interface ISagaTimeoutExpired
     string TicketId { get; }
 }
 
+// Short-delay schedule for Saving timeout recovery (verify/reconcile), separate from step timeout.
+public interface ISagaVerifyDue
+{
+    Guid CorrelationId { get; }
+    string TicketId { get; }
+}
+
 // =========================
 // Concrete record types - dung de publish/send.
 // Tach interface va record giup test va versioning de hon.
 // =========================
 
-public sealed record TicketCreated(Guid CorrelationId, string TicketId, string EmployeeId, string Question, string Category) : ITicketCreated;
-public sealed record TicketAnalyzingMarked(Guid CorrelationId, string TicketId) : ITicketAnalyzingMarked;
+public sealed record TicketCreated(Guid CorrelationId, string TicketId, string EmployeeId, string Question, string Category, int SagaEpoch) : ITicketCreated;
+public sealed record TicketAnalyzingMarked(Guid CorrelationId, string TicketId, int SagaEpoch) : ITicketAnalyzingMarked;
 public sealed record TicketAnalyzingMarkFailed(Guid CorrelationId, string TicketId, string Reason) : ITicketAnalyzingMarkFailed;
 public sealed record TicketSuggestionSaved(Guid CorrelationId, string TicketId) : ITicketSuggestionSaved;
 public sealed record TicketSuggestionSaveFailed(Guid CorrelationId, string TicketId, string Reason) : ITicketSuggestionSaveFailed;
 public sealed record MarkAnalyzingReverted(Guid CorrelationId, string TicketId) : IMarkAnalyzingReverted;
 public sealed record AiSuggestionGenerated(Guid CorrelationId, string TicketId) : IAiSuggestionGenerated;
 
-public sealed record MarkTicketAnalyzing(Guid CorrelationId, string TicketId) : IMarkTicketAnalyzing;
-public sealed record SaveTicketSuggestion(Guid CorrelationId, string TicketId, string Category, string Suggestion, IReadOnlyList<RelatedDocument> RelatedDocuments) : ISaveTicketSuggestion;
+public sealed record MarkTicketAnalyzing(Guid CorrelationId, string TicketId, int ExpectedEpoch) : IMarkTicketAnalyzing;
+public sealed record SaveTicketSuggestion(Guid CorrelationId, string TicketId, int ExpectedEpoch, string Category, string Suggestion, IReadOnlyList<RelatedDocument> RelatedDocuments) : ISaveTicketSuggestion;
 public sealed record CompensateMarkAnalyzing(Guid CorrelationId, string TicketId, string OriginalStatus) : ICompensateMarkAnalyzing;
 
 public sealed record RunAiPipeline(Guid CorrelationId, string TicketId, string Question, string Category) : IRunAiPipeline;
@@ -152,3 +163,4 @@ public sealed record AiPipelineCompleted(Guid CorrelationId, string TicketId, st
 public sealed record AiPipelineFailed(Guid CorrelationId, string TicketId, string Reason) : IAiPipelineFailed;
 
 public sealed record SagaTimeoutExpired(Guid CorrelationId, string TicketId) : ISagaTimeoutExpired;
+public sealed record SagaVerifyDue(Guid CorrelationId, string TicketId) : ISagaVerifyDue;

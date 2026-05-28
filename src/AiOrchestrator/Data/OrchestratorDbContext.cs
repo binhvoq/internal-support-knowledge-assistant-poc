@@ -27,6 +27,7 @@ public sealed class OrchestratorDbContext(DbContextOptions<OrchestratorDbContext
             entity.Property(x => x.EmployeeId).HasMaxLength(64);
             entity.Property(x => x.Category).HasMaxLength(32);
             entity.Property(x => x.OriginalStatus).HasMaxLength(32);
+            entity.Property(x => x.TicketSagaEpoch).HasDefaultValue(0);
             // Concurrency token cho optimistic concurrency.
             entity.Property(x => x.Version).IsConcurrencyToken();
         });

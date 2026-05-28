@@ -60,6 +60,7 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<TicketDbContext>();
     await db.Database.EnsureCreatedAsync();
+    await TicketDbSchema.EnsureSagaEpochColumnsAsync(db);
     // IdempotencyRecords + Ticket + MassTransit Outbox/Inbox tables tu sinh.
 }
 
@@ -154,7 +155,8 @@ app.MapPost("/tickets", async (
         entity.Id,
         entity.EmployeeId,
         entity.Question,
-        entity.Category));
+        entity.Category,
+        entity.SagaEpoch));
 
     var dto = TicketMapper.ToDto(entity);
     if (!string.IsNullOrWhiteSpace(idempotencyKey))
@@ -191,6 +193,23 @@ app.MapGet("/tickets/{id}", async (string id, TicketDbContext db) =>
 {
     var entity = await db.Tickets.FindAsync(id);
     return entity is null ? Results.NotFound() : Results.Ok(TicketMapper.ToDto(entity));
+});
+
+// Source-of-truth read model cho Saving timeout recovery (AiOrchestrator probe).
+app.MapGet("/internal/tickets/{id}/saga-progress", async (string id, TicketDbContext db) =>
+{
+    var entity = await db.Tickets.FindAsync(id);
+    if (entity is null)
+        return Results.NotFound();
+
+    return Results.Ok(new
+    {
+        ticketId = entity.Id,
+        status = entity.Status,
+        sagaEpoch = entity.SagaEpoch,
+        activeSagaCorrelationId = entity.ActiveSagaCorrelationId,
+        hasSuggestion = !string.IsNullOrWhiteSpace(entity.AiSuggestedAnswer)
+    });
 });
 
 app.MapPost("/tickets/{id}/resolve", async (string id, ResolveTicketRequest request, HttpContext httpContext, TicketDbContext db) =>

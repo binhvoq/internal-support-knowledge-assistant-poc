@@ -8,6 +8,10 @@ using SupportPoc.AiOrchestrator.Data;
 using SupportPoc.AiOrchestrator.Mcp;
 using SupportPoc.AiOrchestrator.Options;
 using SupportPoc.AiOrchestrator.Saga;
+using SupportPoc.AiOrchestrator.Saga.Timeouts;
+using SupportPoc.AiOrchestrator.Saga.Timeouts.Activities;
+using SupportPoc.AiOrchestrator.Saga.Timeouts.Policies;
+using SupportPoc.AiOrchestrator.Saga.Timeouts.Probes;
 using SupportPoc.AiOrchestrator.Services;
 using SupportPoc.Shared.Contracts;
 using SupportPoc.Shared.Messaging;
@@ -39,6 +43,11 @@ builder.Services.AddSingleton<McpDynamicPluginLoader>();
 builder.Services.AddScoped<AiPipelineService>();
 builder.Services.AddScoped<IChatCompletionServiceAccessor>();
 builder.Services.AddScoped<TicketSuggestionService>();
+
+builder.Services.AddHttpClient<ITicketProgressProbe, HttpTicketProgressProbe>();
+builder.Services.AddScoped<SavingTimeoutPolicy>();
+builder.Services.AddScoped<ISavingTimeoutEvaluator, SavingTimeoutEvaluator>();
+builder.Services.AddScoped<EvaluateSavingTimeoutActivity>();
 
 // ---------- MassTransit ----------
 var serviceBus = builder.Configuration.GetSection(ServiceBusOptions.SectionName).Get<ServiceBusOptions>() ?? new ServiceBusOptions();
@@ -115,6 +124,7 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<OrchestratorDbContext>();
     await db.Database.EnsureCreatedAsync();
+    await OrchestratorDbSchema.EnsureSagaStateColumnsAsync(db);
 }
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "ai-orchestrator" }));
@@ -201,6 +211,10 @@ app.MapGet("/debug/saga", async (string? ticketId, OrchestratorDbContext db) =>
             x.OriginalStatus,
             x.FailureReason,
             x.CompensationReason,
+            x.PendingTimeoutOutcome,
+            x.TimeoutDecisionReason,
+            x.TimeoutVerifyAttempts,
+            x.SaveResendIssued,
             x.CreatedAt,
             x.UpdatedAt
         })

@@ -1,12 +1,19 @@
 namespace SupportPoc.AiOrchestrator.Options;
 
 // Cau hinh timeout cho saga TicketSuggestion.
-// Default 5 phut cho production. Test co the override xuong vai chuc giay
-// de verify scenario timeout fire ma khong phai cho lau.
 public sealed class SagaTimeoutOptions
 {
     public const string SectionName = "Saga";
 
-    // Sau bao nhieu giay khong nhan dien event tiep theo thi Timeout.Received fire.
+    // Step timeout: cho event tiep theo trong flow (Analyzing, RunningAi, Saving...).
     public int TimeoutSeconds { get; set; } = 300;
+
+    // VerifyDue: delay ngan khi Saving timeout recovery nghi ngo (khong dung TimeoutSeconds).
+    public int VerifyRetrySeconds { get; set; } = 15;
+
+    // So lan verify truoc khi ResendSave (Saving).
+    public int MaxVerifyAttempts { get; set; } = 3;
+
+    // So lan verify sau ResendSave truoc khi Compensate (Saving).
+    public int PostResendVerifyAttempts { get; set; } = 2;
 }

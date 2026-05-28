@@ -23,16 +23,33 @@ public sealed class TicketSuggestionState : SagaStateMachineInstance, ISagaVersi
     // Trang thai ticket truoc khi MarkAnalyzing - de compensate chinh xac.
     public string OriginalStatus { get; set; } = string.Empty;
 
+    // Epoch ticket luc saga bat dau / sau MarkAnalyzing — dung cho ExpectedEpoch tren command.
+    public int TicketSagaEpoch { get; set; }
+
     public string? Category { get; set; }
     public string? Suggestion { get; set; }
     public string? RelatedDocumentsJson { get; set; }
 
-    // Token de Unschedule timeout khi saga ket thuc binh thuong.
+    // Token de Unschedule step timeout khi saga ket thuc binh thuong.
     public Guid? TimeoutTokenId { get; set; }
+
+    // Token cho VerifyDue schedule (Saving timeout recovery) — rieng voi TimeoutTokenId.
+    public Guid? VerifyTimeoutTokenId { get; set; }
+
+    // Saving timeout recovery — Activity ghi, StateMachine branch.
+    public string? PendingTimeoutOutcome { get; set; }
+    public string? TimeoutDecisionReason { get; set; }
+    public int TimeoutVerifyAttempts { get; set; }
+    public int PostResendVerifyAttempts { get; set; }
+    public bool SaveResendIssued { get; set; }
+    public DateTimeOffset? SaveResendIssuedAt { get; set; }
 
     public string? FailureReason { get; set; }
     public string? CompensationReason { get; set; }
 
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
+
+    // TECHNICAL DEBT (phase 1): TicketService khong clear ActiveSagaCorrelationId sau save complete.
+    // Probe/policy Complete van check ownership + epoch. Phase 2: FinalizeTicketSuggestionSaga hoac clear tren save.
 }

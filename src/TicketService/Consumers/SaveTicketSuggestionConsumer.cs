@@ -1,7 +1,9 @@
 using System.Text.Json;
 using MassTransit;
+using Microsoft.EntityFrameworkCore;
 using SupportPoc.Shared.Contracts;
 using SupportPoc.Shared.Models;
+using SupportPoc.Shared.Testing;
 using SupportPoc.TicketService.Data;
 
 namespace SupportPoc.TicketService.Consumers;
@@ -32,12 +34,19 @@ public sealed class SaveTicketSuggestionConsumer : IConsumer<ISaveTicketSuggesti
             return;
         }
 
-        // State-based idempotency: chi save khi dang Analyzing.
-        // Neu da Suggested roi -> coi nhu thanh cong (retry case).
+        if (!IsEpochValid(ticket, msg))
+        {
+            _logger.LogWarning(
+                "Stale SaveTicketSuggestion TicketId={TicketId} epoch={Epoch} expected={Expected} activeSaga={Active}",
+                msg.TicketId, ticket.SagaEpoch, msg.ExpectedEpoch, ticket.ActiveSagaCorrelationId);
+            return;
+        }
+
         if (ticket.Status == TicketStatus.Suggested && !string.IsNullOrWhiteSpace(ticket.AiSuggestedAnswer))
         {
             _logger.LogInformation("Ticket {TicketId} da co Suggestion - bo qua save lap.", msg.TicketId);
             await context.Publish<ITicketSuggestionSaved>(new TicketSuggestionSaved(msg.CorrelationId, msg.TicketId));
+            await _db.SaveChangesAsync(context.CancellationToken);
             return;
         }
 
@@ -47,11 +56,39 @@ public sealed class SaveTicketSuggestionConsumer : IConsumer<ISaveTicketSuggesti
         ticket.RelatedDocumentsJson = JsonSerializer.Serialize(msg.RelatedDocuments, JsonOptions);
         ticket.UpdatedAt = DateTimeOffset.UtcNow;
 
-        await context.Publish<ITicketSuggestionSaved>(new TicketSuggestionSaved(msg.CorrelationId, msg.TicketId));
-        await _db.SaveChangesAsync(context.CancellationToken);
+        // Fault injection: save da commit nhung event ack bi "mat/tre" (skip publish) de test recovery cua Saving timeout.
+        var skipSavedEvent = ticket.Question.Has(FaultInjection.ForceSkipSaveSuggestionEvent);
+        if (!skipSavedEvent)
+        {
+            await context.Publish<ITicketSuggestionSaved>(new TicketSuggestionSaved(msg.CorrelationId, msg.TicketId));
+        }
+
+        try
+        {
+            await _db.SaveChangesAsync(context.CancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            _logger.LogWarning(
+                "SaveSuggestion concurrency conflict (compensate da bump epoch?) TicketId={TicketId}",
+                msg.TicketId);
+            return;
+        }
+
+        if (skipSavedEvent)
+        {
+            _logger.LogWarning(
+                "FaultInjection: ForceSkipSaveSuggestionEvent -> saved DB but skipped TicketSuggestionSaved publish. TicketId={TicketId}",
+                msg.TicketId);
+            return;
+        }
 
         _logger.LogInformation("SaveSuggestion OK TicketId={TicketId} SagaId={SagaId}", msg.TicketId, msg.CorrelationId);
     }
+
+    private static bool IsEpochValid(TicketEntity ticket, ISaveTicketSuggestion msg) =>
+        ticket.SagaEpoch == msg.ExpectedEpoch &&
+        ticket.ActiveSagaCorrelationId == msg.CorrelationId;
 }
 
 public sealed class SaveTicketSuggestionConsumerDefinition : ConsumerDefinition<SaveTicketSuggestionConsumer>

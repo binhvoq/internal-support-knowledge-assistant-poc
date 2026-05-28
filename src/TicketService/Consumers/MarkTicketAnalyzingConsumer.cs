@@ -33,24 +33,42 @@ public sealed class MarkTicketAnalyzingConsumer : IConsumer<IMarkTicketAnalyzing
             return;
         }
 
+        if (ticket.SagaEpoch != msg.ExpectedEpoch)
+        {
+            _logger.LogWarning(
+                "Stale MarkTicketAnalyzing TicketId={TicketId} epoch={Epoch} expected={Expected}",
+                msg.TicketId, ticket.SagaEpoch, msg.ExpectedEpoch);
+            return;
+        }
+
         // FAULT INJECTION (timeout verify): silent return - khong publish event nao.
-        // Saga ket o state Analyzing -> Timeout.Received fire sau N giay -> sang Failed.
-        // Ticket van duoc cap nhat sang Analyzing de show "MarkAnalyzing da chay xong nhung
-        // event bi mat tren broker" - kich ban thuc te khi consumer crash giua chung.
         if (ticket.Question.Has(FaultInjection.ForceSkipMarkAnalyzing))
         {
             ticket.Status = TicketStatus.Analyzing;
+            ticket.ActiveSagaCorrelationId = msg.CorrelationId;
+            ticket.SagaEpoch = msg.ExpectedEpoch + 1;
             ticket.UpdatedAt = DateTimeOffset.UtcNow;
             await _db.SaveChangesAsync(context.CancellationToken);
             _logger.LogWarning("FaultInjection: ForceSkipMarkAnalyzing -> skip publishing event for TicketId={TicketId}", msg.TicketId);
             return;
         }
 
-        // State-based idempotency: neu da Analyzing/Suggested/Resolved roi thi khong PATCH lai.
+        if (ticket.ActiveSagaCorrelationId == msg.CorrelationId &&
+            ticket.Status is TicketStatus.Analyzing or TicketStatus.Suggested or TicketStatus.Resolved)
+        {
+            _logger.LogInformation("Ticket {TicketId} da {Status} (cung saga) - idempotent MarkAnalyzing.", msg.TicketId, ticket.Status);
+            await context.Publish<ITicketAnalyzingMarked>(new TicketAnalyzingMarked(
+                msg.CorrelationId, msg.TicketId, ticket.SagaEpoch));
+            await _db.SaveChangesAsync(context.CancellationToken);
+            return;
+        }
+
         if (ticket.Status is TicketStatus.Suggested or TicketStatus.Resolved)
         {
             _logger.LogInformation("Ticket {TicketId} da {Status} - bo qua MarkAnalyzing.", msg.TicketId, ticket.Status);
-            await context.Publish<ITicketAnalyzingMarked>(new TicketAnalyzingMarked(msg.CorrelationId, msg.TicketId));
+            await context.Publish<ITicketAnalyzingMarked>(new TicketAnalyzingMarked(
+                msg.CorrelationId, msg.TicketId, ticket.SagaEpoch));
+            await _db.SaveChangesAsync(context.CancellationToken);
             return;
         }
 
@@ -60,15 +78,24 @@ public sealed class MarkTicketAnalyzingConsumer : IConsumer<IMarkTicketAnalyzing
             ticket.UpdatedAt = DateTimeOffset.UtcNow;
         }
 
-        // SaveChangesAsync trong consumer scope se commit cung outbox transaction:
-        // - Ticket UPDATE
-        // - OutboxMessage INSERT (Publish ITicketAnalyzingMarked)
-        // - InboxState INSERT (dedupe MessageId)
-        // -> Atomic. Khong con dual-write problem.
-        await context.Publish<ITicketAnalyzingMarked>(new TicketAnalyzingMarked(msg.CorrelationId, msg.TicketId));
-        await _db.SaveChangesAsync(context.CancellationToken);
+        ticket.ActiveSagaCorrelationId = msg.CorrelationId;
+        ticket.SagaEpoch = msg.ExpectedEpoch + 1;
 
-        _logger.LogInformation("MarkAnalyzing OK TicketId={TicketId} SagaId={SagaId}", msg.TicketId, msg.CorrelationId);
+        var markedEpoch = ticket.SagaEpoch;
+        await context.Publish<ITicketAnalyzingMarked>(new TicketAnalyzingMarked(
+            msg.CorrelationId, msg.TicketId, markedEpoch));
+
+        try
+        {
+            await _db.SaveChangesAsync(context.CancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            _logger.LogWarning("MarkAnalyzing concurrency conflict (stale epoch) TicketId={TicketId}", msg.TicketId);
+            return;
+        }
+
+        _logger.LogInformation("MarkAnalyzing OK TicketId={TicketId} SagaId={SagaId} Epoch={Epoch}", msg.TicketId, msg.CorrelationId, markedEpoch);
     }
 }
 

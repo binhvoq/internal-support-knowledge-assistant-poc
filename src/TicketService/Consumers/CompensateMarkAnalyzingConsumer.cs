@@ -6,9 +6,7 @@ using SupportPoc.TicketService.Data;
 namespace SupportPoc.TicketService.Consumers;
 
 // Compensating transaction: revert ticket ve OriginalStatus (truoc khi MarkAnalyzing).
-// QUAN TRONG: compensation phai idempotent - co the chay nhieu lan an toan.
-// Nghiep vu moi: neu saga fail/timeout thi PHAI rollback 100% ve state ban dau,
-// ke ca truong hop da save AI suggestion (khong con "semantic skip").
+// SagaEpoch++ trong cung transaction de vo hieu lenh Save/Mark tre.
 public sealed class CompensateMarkAnalyzingConsumer : IConsumer<ICompensateMarkAnalyzing>
 {
     private readonly TicketDbContext _db;
@@ -27,28 +25,39 @@ public sealed class CompensateMarkAnalyzingConsumer : IConsumer<ICompensateMarkA
 
         if (ticket is null)
         {
-            // Ticket khong ton tai -> coi nhu da rollback xong (idempotent).
             _logger.LogWarning("Compensate: ticket khong ton tai. TicketId={TicketId}", msg.TicketId);
             await context.Publish<IMarkAnalyzingReverted>(new MarkAnalyzingReverted(msg.CorrelationId, msg.TicketId));
             return;
         }
 
-        // Rollback 100% ve state ban dau:
-        // - Status ve OriginalStatus (default New neu OriginalStatus rong)
-        // - Xoa du lieu AI (neu da save) de tranh "compensated nhung ticket van Suggested"
-        var oldStatus = ticket.Status;
-        var targetStatus = string.IsNullOrWhiteSpace(msg.OriginalStatus) ? TicketStatus.New : msg.OriginalStatus;
-        ticket.Status = targetStatus;
-        ticket.Category = string.Empty;
-        ticket.AiSuggestedAnswer = null;
-        ticket.RelatedDocumentsJson = "[]";
-        ticket.UpdatedAt = DateTimeOffset.UtcNow;
+        var ownsTicket = ticket.ActiveSagaCorrelationId == msg.CorrelationId;
+        if (ownsTicket)
+        {
+            var oldStatus = ticket.Status;
+            var targetStatus = string.IsNullOrWhiteSpace(msg.OriginalStatus) ? TicketStatus.New : msg.OriginalStatus;
+            ticket.Status = targetStatus;
+            ticket.Category = string.Empty;
+            ticket.AiSuggestedAnswer = null;
+            ticket.RelatedDocumentsJson = "[]";
+            ticket.ActiveSagaCorrelationId = null;
+            ticket.SagaEpoch++;
+            ticket.UpdatedAt = DateTimeOffset.UtcNow;
 
-        _logger.LogInformation(
-            "Compensated TicketId={TicketId}: status={OldStatus} -> {NewStatus} (AI fields cleared)",
-            msg.TicketId,
-            oldStatus,
-            targetStatus);
+            _logger.LogInformation(
+                "Compensated TicketId={TicketId}: status={OldStatus} -> {NewStatus}, epoch={Epoch} (AI cleared)",
+                msg.TicketId,
+                oldStatus,
+                targetStatus,
+                ticket.SagaEpoch);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "Compensate skip DB mutate TicketId={TicketId} activeSaga={Active} msgSaga={MsgSaga}",
+                msg.TicketId,
+                ticket.ActiveSagaCorrelationId,
+                msg.CorrelationId);
+        }
 
         await context.Publish<IMarkAnalyzingReverted>(new MarkAnalyzingReverted(msg.CorrelationId, msg.TicketId));
         await _db.SaveChangesAsync(context.CancellationToken);
@@ -67,7 +76,6 @@ public sealed class CompensateMarkAnalyzingConsumerDefinition : ConsumerDefiniti
         IConsumerConfigurator<CompensateMarkAnalyzingConsumer> consumerConfigurator,
         IRegistrationContext context)
     {
-        // Compensation cuc ki quan trong - retry aggressive hon.
         endpointConfigurator.UseMessageRetry(r => r.Intervals(100, 500, 1000, 2000, 5000, 10000));
         endpointConfigurator.UseDelayedRedelivery(r => r.Intervals(TimeSpan.FromSeconds(15), TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(5)));
         endpointConfigurator.UseEntityFrameworkOutbox<TicketDbContext>(context);
