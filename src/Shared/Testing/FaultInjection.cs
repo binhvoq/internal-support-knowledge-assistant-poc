@@ -27,6 +27,10 @@ public static class FaultInjection
     // Dung de verify Compensating-timeout probe -> Compensated (tranh Failed gia).
     public const string ForceSkipCompensateRevertedEvent = "__SKIP_COMPENSATE_EVENT__";
 
+    // RunAiPipelineConsumer ghi AiDraft vao DB nhung KHONG publish AiPipelineCompleted.
+    // Dung de verify RunningAi-timeout probe -> Proceed (khong resend LLM).
+    public const string ForceSkipAiPipelineCompletedEvent = "__SKIP_AI_EVENT__";
+
     public static bool Has(this string? text, string marker)
         => !string.IsNullOrEmpty(text) && text.Contains(marker, StringComparison.OrdinalIgnoreCase);
 }

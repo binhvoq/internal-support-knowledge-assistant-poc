@@ -13,7 +13,7 @@ Event fail ro (`AnalyzingMarkFailed`, `AiPipelineFailed`, `SuggestionSaveFailed`
 | Buoc | Outcome timeout |
 |------|-----------------|
 | `Analyzing` | `Proceed`, `ResendMark`, `RetryVerify`, `Fail` |
-| `RunningAi` | `Proceed`, `ResendRun`, `RetryVerify`, `Compensate`, `Fail` |
+| `RunningAi` | `Proceed` (saga payload hoac **AiDraft** tren ticket), `ResendRun`, `RetryVerify`, `Compensate`, `Fail` |
 | `Saving` | `Complete`, `ResendSave`, `RetryVerify`, `Compensate`, `Fail` |
 | `Compensating` | `Complete` → `Compensated`, `ResendCompensate`, `RetryVerify`, `Fail` |
 
@@ -82,6 +82,7 @@ Gan marker vao `question` khi `POST /tickets`:
 |--------|----------|--------------|
 | `__SKIP_MARK__` | Mark DB, skip event | Probe Analyzing → Completed |
 | `__SKIP_SAVE_EVENT__` | Save DB, skip event | Probe Saving → Completed |
+| `__SKIP_AI_EVENT__` | Ghi AiDraft DB, skip `AiPipelineCompleted` | Probe RunningAi → Proceed (khong resend LLM) |
 | `__FAIL_AI__` | AI fail | Compensated (event) |
 | `__FAIL_AI__` + `__SKIP_COMPENSATE_EVENT__` | Revert DB, skip event | Probe Compensating → Compensated |
 | `__POISON_AI__` | Uncaught throw | DLQ (chua co unit test) |
@@ -100,4 +101,5 @@ Poll saga: `curl "http://localhost:5003/debug/saga?ticketId=TCK-xxx"`
 
 - Policy + probe unavailable Compensating + compensate idempotent: **co unit test**
 - 4 marker chinh tren Azure+local: **da chay tay pass**
+- RunningAi: `RunAiPipelineConsumer` ghi **AiDraft** vao TicketService (`RecordAiPipelineDraft`) truoc khi publish `AiPipelineCompleted`
 - Chua bat buoc: UI fault panel, `__POISON_AI__` / DLQ, RunningAi resend x2 integration

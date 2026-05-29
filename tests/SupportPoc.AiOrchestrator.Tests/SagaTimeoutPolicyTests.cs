@@ -56,8 +56,23 @@ public sealed class SagaTimeoutPolicyTests
         string status,
         int epoch,
         Guid? activeSaga = null,
-        bool hasSuggestion = false) =>
-        new("TCK-TEST", status, epoch, activeSaga ?? SagaId, hasSuggestion);
+        bool hasSuggestion = false,
+        bool hasAiDraft = false,
+        string? aiDraftCategory = null,
+        string? aiDraftSuggestion = null,
+        string aiDraftRelatedJson = "[]") =>
+        new(
+            "TCK-TEST",
+            status,
+            epoch,
+            activeSaga ?? SagaId,
+            hasSuggestion,
+            hasAiDraft,
+            hasAiDraft ? (activeSaga ?? SagaId) : null,
+            hasAiDraft ? epoch : null,
+            aiDraftCategory,
+            aiDraftSuggestion,
+            aiDraftRelatedJson);
 
     // --- Analyzing ---
 
@@ -129,6 +144,27 @@ public sealed class SagaTimeoutPolicyTests
         var decision = policy.Decide(probe, Ctx(saga, TestOptions().RunningAi));
 
         Assert.Equal(SagaTimeoutOutcome.Proceed, decision.Outcome);
+    }
+
+    [Fact]
+    public void RunningAi_draft_at_ticket_proceeds_with_payload()
+    {
+        var saga = Saga();
+        var policy = new RunningAiTimeoutPolicy(WrapOpts());
+        var probe = Found(Snapshot(
+            TicketStatus.Analyzing,
+            epoch: 1,
+            hasAiDraft: true,
+            aiDraftCategory: "IT",
+            aiDraftSuggestion: "Reset VPN",
+            aiDraftRelatedJson: "[]"));
+
+        var decision = policy.Decide(probe, Ctx(saga, TestOptions().RunningAi, verifyAttempt: 2));
+
+        Assert.Equal(SagaTimeoutOutcome.Proceed, decision.Outcome);
+        Assert.Equal("IT", decision.RecoveredCategory);
+        Assert.Equal("Reset VPN", decision.RecoveredSuggestion);
+        Assert.Contains("source of truth", decision.Reason, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

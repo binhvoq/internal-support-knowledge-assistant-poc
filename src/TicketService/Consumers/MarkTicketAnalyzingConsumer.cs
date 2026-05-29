@@ -4,6 +4,7 @@ using SupportPoc.Shared.Contracts;
 using SupportPoc.Shared.Models;
 using SupportPoc.Shared.Testing;
 using SupportPoc.TicketService.Data;
+using SupportPoc.TicketService.Services;
 
 namespace SupportPoc.TicketService.Consumers;
 
@@ -107,6 +108,7 @@ public sealed class MarkTicketAnalyzingConsumer : IConsumer<IMarkTicketAnalyzing
 
         ticket.ActiveSagaCorrelationId = msg.CorrelationId;
         ticket.SagaEpoch = msg.ExpectedEpoch + 1;
+        TicketAiDraftHelper.ClearDraft(ticket);
         ticket.UpdatedAt = DateTimeOffset.UtcNow;
     }
 }

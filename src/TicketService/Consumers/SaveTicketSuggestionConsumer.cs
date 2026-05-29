@@ -5,6 +5,7 @@ using SupportPoc.Shared.Contracts;
 using SupportPoc.Shared.Models;
 using SupportPoc.Shared.Testing;
 using SupportPoc.TicketService.Data;
+using SupportPoc.TicketService.Services;
 
 namespace SupportPoc.TicketService.Consumers;
 
@@ -55,6 +56,7 @@ public sealed class SaveTicketSuggestionConsumer : IConsumer<ISaveTicketSuggesti
         ticket.Category = msg.Category;
         ticket.AiSuggestedAnswer = msg.Suggestion;
         ticket.RelatedDocumentsJson = JsonSerializer.Serialize(msg.RelatedDocuments, JsonOptions);
+        TicketAiDraftHelper.ClearDraft(ticket);
         ticket.ActiveSagaCorrelationId = null;
         ticket.UpdatedAt = DateTimeOffset.UtcNow;
 

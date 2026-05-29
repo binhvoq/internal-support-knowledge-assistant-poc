@@ -34,5 +34,30 @@ internal static class TicketDbSchema
             await db.Database.ExecuteSqlRawAsync(
                 "ALTER TABLE Tickets ADD COLUMN ActiveSagaCorrelationId TEXT NULL",
                 cancellationToken);
+
+        if (!columns.Contains("AiDraftCategory"))
+            await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE Tickets ADD COLUMN AiDraftCategory TEXT NULL",
+                cancellationToken);
+
+        if (!columns.Contains("AiDraftSuggestion"))
+            await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE Tickets ADD COLUMN AiDraftSuggestion TEXT NULL",
+                cancellationToken);
+
+        if (!columns.Contains("AiDraftRelatedDocumentsJson"))
+            await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE Tickets ADD COLUMN AiDraftRelatedDocumentsJson TEXT NOT NULL DEFAULT '[]'",
+                cancellationToken);
+
+        if (!columns.Contains("AiDraftCorrelationId"))
+            await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE Tickets ADD COLUMN AiDraftCorrelationId TEXT NULL",
+                cancellationToken);
+
+        if (!columns.Contains("AiDraftSagaEpoch"))
+            await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE Tickets ADD COLUMN AiDraftSagaEpoch INTEGER NULL",
+                cancellationToken);
     }
 }

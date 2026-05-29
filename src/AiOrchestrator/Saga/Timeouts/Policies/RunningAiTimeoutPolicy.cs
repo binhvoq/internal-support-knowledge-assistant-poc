@@ -66,6 +66,16 @@ public sealed class RunningAiTimeoutPolicy(IOptions<SagaTimeoutOptions> options)
         if (ticket.HasSuggestion)
             return SagaTimeoutDecision.Fail("Analyzing but HasSuggestion=true — inconsistent state");
 
+        if (TryGetMatchingAiDraft(ticket, saga, out var draftCategory, out var draftSuggestion, out var draftRelatedJson))
+        {
+            return SagaTimeoutDecision.ProceedFromTicketDraft(
+                "AI draft already stored at TicketService (source of truth)",
+                saga.TicketSagaEpoch,
+                draftCategory,
+                draftSuggestion,
+                draftRelatedJson);
+        }
+
         if (ctx.ResendCount > 0)
         {
             if (ctx.PostResendVerifyAttempt < step.PostResendVerifyAttempts)
@@ -92,4 +102,29 @@ public sealed class RunningAiTimeoutPolicy(IOptions<SagaTimeoutOptions> options)
 
     private static bool HasAiPayload(TicketSuggestionState saga) =>
         !string.IsNullOrWhiteSpace(saga.Category) && !string.IsNullOrWhiteSpace(saga.Suggestion);
+
+    private static bool TryGetMatchingAiDraft(
+        TicketProgressSnapshot ticket,
+        TicketSuggestionState saga,
+        out string category,
+        out string suggestion,
+        out string relatedJson)
+    {
+        category = ticket.AiDraftCategory ?? string.Empty;
+        suggestion = ticket.AiDraftSuggestion ?? string.Empty;
+        relatedJson = string.IsNullOrWhiteSpace(ticket.AiDraftRelatedDocumentsJson)
+            ? "[]"
+            : ticket.AiDraftRelatedDocumentsJson;
+
+        if (!ticket.HasAiDraft)
+            return false;
+
+        if (ticket.AiDraftCorrelationId != saga.CorrelationId)
+            return false;
+
+        if (ticket.AiDraftSagaEpoch != saga.TicketSagaEpoch)
+            return false;
+
+        return !string.IsNullOrWhiteSpace(category) && !string.IsNullOrWhiteSpace(suggestion);
+    }
 }

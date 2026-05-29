@@ -104,8 +104,33 @@ public interface IRunAiPipeline
 {
     Guid CorrelationId { get; }
     string TicketId { get; }
+    int ExpectedEpoch { get; }
     string Question { get; }
     string Category { get; }
+}
+
+// TicketService persist AI result truoc khi AiOrchestrator publish AiPipelineCompleted (source of truth).
+public interface IRecordAiPipelineDraft
+{
+    Guid CorrelationId { get; }
+    string TicketId { get; }
+    int ExpectedEpoch { get; }
+    string Category { get; }
+    string Suggestion { get; }
+    IReadOnlyList<RelatedDocument> RelatedDocuments { get; }
+}
+
+public interface IAiPipelineDraftRecorded
+{
+    Guid CorrelationId { get; }
+    string TicketId { get; }
+}
+
+public interface IAiPipelineDraftRejected
+{
+    Guid CorrelationId { get; }
+    string TicketId { get; }
+    string Reason { get; }
 }
 
 public interface IAiPipelineCompleted
@@ -158,7 +183,10 @@ public sealed record MarkTicketAnalyzing(Guid CorrelationId, string TicketId, in
 public sealed record SaveTicketSuggestion(Guid CorrelationId, string TicketId, int ExpectedEpoch, string Category, string Suggestion, IReadOnlyList<RelatedDocument> RelatedDocuments) : ISaveTicketSuggestion;
 public sealed record CompensateMarkAnalyzing(Guid CorrelationId, string TicketId, string OriginalStatus) : ICompensateMarkAnalyzing;
 
-public sealed record RunAiPipeline(Guid CorrelationId, string TicketId, string Question, string Category) : IRunAiPipeline;
+public sealed record RunAiPipeline(Guid CorrelationId, string TicketId, int ExpectedEpoch, string Question, string Category) : IRunAiPipeline;
+public sealed record RecordAiPipelineDraft(Guid CorrelationId, string TicketId, int ExpectedEpoch, string Category, string Suggestion, IReadOnlyList<RelatedDocument> RelatedDocuments) : IRecordAiPipelineDraft;
+public sealed record AiPipelineDraftRecorded(Guid CorrelationId, string TicketId) : IAiPipelineDraftRecorded;
+public sealed record AiPipelineDraftRejected(Guid CorrelationId, string TicketId, string Reason) : IAiPipelineDraftRejected;
 public sealed record AiPipelineCompleted(Guid CorrelationId, string TicketId, string Category, string Suggestion, IReadOnlyList<RelatedDocument> RelatedDocuments) : IAiPipelineCompleted;
 public sealed record AiPipelineFailed(Guid CorrelationId, string TicketId, string Reason) : IAiPipelineFailed;
 

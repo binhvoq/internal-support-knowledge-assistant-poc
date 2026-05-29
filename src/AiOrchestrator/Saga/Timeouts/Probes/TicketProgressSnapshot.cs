@@ -5,4 +5,10 @@ public sealed record TicketProgressSnapshot(
     string Status,
     int SagaEpoch,
     Guid? ActiveSagaCorrelationId,
-    bool HasSuggestion);
+    bool HasSuggestion,
+    bool HasAiDraft = false,
+    Guid? AiDraftCorrelationId = null,
+    int? AiDraftSagaEpoch = null,
+    string? AiDraftCategory = null,
+    string? AiDraftSuggestion = null,
+    string? AiDraftRelatedDocumentsJson = null);

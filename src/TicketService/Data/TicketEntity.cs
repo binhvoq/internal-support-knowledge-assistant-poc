@@ -8,6 +8,12 @@ public sealed class TicketEntity
     public required string Question { get; set; }
     public required string Status { get; set; }
     public string? AiSuggestedAnswer { get; set; }
+    /// <summary>AI pipeline draft (RunningAi source of truth) truoc khi SaveTicketSuggestion.</summary>
+    public string? AiDraftCategory { get; set; }
+    public string? AiDraftSuggestion { get; set; }
+    public string AiDraftRelatedDocumentsJson { get; set; } = "[]";
+    public Guid? AiDraftCorrelationId { get; set; }
+    public int? AiDraftSagaEpoch { get; set; }
     public string? FinalAnswer { get; set; }
     public string RelatedDocumentsJson { get; set; } = "[]";
     /// <summary>So phien saga; tang khi Mark thanh cong va khi Compensate.</summary>

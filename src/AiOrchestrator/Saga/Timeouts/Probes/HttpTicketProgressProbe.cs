@@ -49,7 +49,13 @@ public sealed class HttpTicketProgressProbe : ITicketProgressProbe
                 dto.Status,
                 dto.SagaEpoch,
                 dto.ActiveSagaCorrelationId,
-                dto.HasSuggestion);
+                dto.HasSuggestion,
+                dto.HasAiDraft,
+                dto.AiDraftCorrelationId,
+                dto.AiDraftSagaEpoch,
+                dto.AiDraftCategory,
+                dto.AiDraftSuggestion,
+                dto.AiDraftRelatedDocumentsJson);
 
             return new(TicketProgressProbeStatus.Found, snapshot, null);
         }
@@ -69,5 +75,11 @@ public sealed class HttpTicketProgressProbe : ITicketProgressProbe
         string Status,
         int SagaEpoch,
         Guid? ActiveSagaCorrelationId,
-        bool HasSuggestion);
+        bool HasSuggestion,
+        bool HasAiDraft,
+        Guid? AiDraftCorrelationId,
+        int? AiDraftSagaEpoch,
+        string? AiDraftCategory,
+        string? AiDraftSuggestion,
+        string? AiDraftRelatedDocumentsJson);
 }

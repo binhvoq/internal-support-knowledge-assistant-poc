@@ -11,12 +11,20 @@ namespace SupportPoc.AiOrchestrator.Consumers;
 // 2) Co the apply retry policy + DLQ rieng cho buoc AI (vd. quota error -> dung lai).
 public sealed class RunAiPipelineConsumer : IConsumer<IRunAiPipeline>
 {
+    private static readonly TimeSpan DraftRecordRequestTimeout = TimeSpan.FromSeconds(30);
+    private static readonly Uri RecordDraftAddress = new("queue:record-ai-pipeline-draft");
+
     private readonly AiPipelineService _pipeline;
+    private readonly IBus _bus;
     private readonly ILogger<RunAiPipelineConsumer> _logger;
 
-    public RunAiPipelineConsumer(AiPipelineService pipeline, ILogger<RunAiPipelineConsumer> logger)
+    public RunAiPipelineConsumer(
+        AiPipelineService pipeline,
+        IBus bus,
+        ILogger<RunAiPipelineConsumer> logger)
     {
         _pipeline = pipeline;
+        _bus = bus;
         _logger = logger;
     }
 
@@ -26,8 +34,6 @@ public sealed class RunAiPipelineConsumer : IConsumer<IRunAiPipeline>
         _logger.LogInformation("AI pipeline start TicketId={TicketId} SagaId={SagaId}", msg.TicketId, msg.CorrelationId);
 
         // FAULT INJECTION (DLQ verify): throw KHONG catch -> MassTransit retry 5 lan -> dead-letter queue.
-        // Khac voi ForceAiFail (catch + publish failed event), poison marker test
-        // duong di "transport-level error" -> _error queue cua Service Bus.
         if (msg.Question.Has(FaultInjection.ForcePoisonAi))
         {
             _logger.LogError("FaultInjection: ForcePoisonAi marker detected -> throwing uncaught -> retries -> DLQ.");
@@ -37,19 +43,60 @@ public sealed class RunAiPipelineConsumer : IConsumer<IRunAiPipeline>
         try
         {
             var result = await _pipeline.RunAsync(msg.Question, msg.Category, context.CancellationToken);
-            await context.Publish<IAiPipelineCompleted>(new AiPipelineCompleted(
+
+            var draftClient = _bus.CreateRequestClient<IRecordAiPipelineDraft>(RecordDraftAddress, DraftRecordRequestTimeout);
+            var draftResponse = await draftClient.GetResponse<IAiPipelineDraftRecorded, IAiPipelineDraftRejected>(
+                new RecordAiPipelineDraft(
+                    msg.CorrelationId,
+                    msg.TicketId,
+                    msg.ExpectedEpoch,
+                    result.Category,
+                    result.Suggestion,
+                    result.Related),
+                context.CancellationToken);
+
+            if (draftResponse.Is(out Response<IAiPipelineDraftRejected>? rejected))
+            {
+                _logger.LogError(
+                    "RecordAiPipelineDraft rejected TicketId={TicketId} SagaId={SagaId} Reason={Reason}",
+                    msg.TicketId,
+                    msg.CorrelationId,
+                    rejected!.Message.Reason);
+                await context.Publish<IAiPipelineFailed>(new AiPipelineFailed(
+                    msg.CorrelationId,
+                    msg.TicketId,
+                    rejected.Message.Reason));
+                return;
+            }
+
+            var skipCompletedEvent = msg.Question.Has(FaultInjection.ForceSkipAiPipelineCompletedEvent);
+            if (!skipCompletedEvent)
+            {
+                await context.Publish<IAiPipelineCompleted>(new AiPipelineCompleted(
+                    msg.CorrelationId,
+                    msg.TicketId,
+                    result.Category,
+                    result.Suggestion,
+                    result.Related));
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "FaultInjection: ForceSkipAiPipelineCompletedEvent -> draft saved but skipped AiPipelineCompleted. TicketId={TicketId}",
+                    msg.TicketId);
+            }
+        }
+        catch (RequestTimeoutException ex)
+        {
+            _logger.LogError(ex, "RecordAiPipelineDraft request timeout TicketId={TicketId}", msg.TicketId);
+            await context.Publish<IAiPipelineFailed>(new AiPipelineFailed(
                 msg.CorrelationId,
                 msg.TicketId,
-                result.Category,
-                result.Suggestion,
-                result.Related));
+                "Timed out recording AI draft at TicketService"));
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "AI pipeline that bai TicketId={TicketId}", msg.TicketId);
-            // Quan trong: KHONG throw - publish failure event de saga compensate.
-            // Neu throw, MassTransit retry consumer -> co the chay LLM nhieu lan (ton tien).
-            // Throw chi nen dung cho transient infra error.
             await context.Publish<IAiPipelineFailed>(new AiPipelineFailed(
                 msg.CorrelationId,
                 msg.TicketId,
@@ -58,13 +105,11 @@ public sealed class RunAiPipelineConsumer : IConsumer<IRunAiPipeline>
     }
 }
 
-// Consumer definition - cau hinh retry/endpoint cho RunAiPipeline.
 public sealed class RunAiPipelineConsumerDefinition : ConsumerDefinition<RunAiPipelineConsumer>
 {
     public RunAiPipelineConsumerDefinition()
     {
         EndpointName = "run-ai-pipeline";
-        // AI ton tien -> retry it.
         ConcurrentMessageLimit = 4;
     }
 
@@ -73,32 +118,13 @@ public sealed class RunAiPipelineConsumerDefinition : ConsumerDefinition<RunAiPi
         IConsumerConfigurator<RunAiPipelineConsumer> consumerConfigurator,
         IRegistrationContext context)
     {
-        // Retry intervals khop voi MaxDeliveryCount = 5 (transport-level redelivery)
-        // 4 retry o app-layer + 1 lan dau = 5. Sau khi het, ASB tu chuyen sang DLQ.
         endpointConfigurator.UseMessageRetry(r => r.Intervals(500, 2000, 5000, 10000));
 
-        // ---------------------------------------------------------------------
-        // LOCK DURATION FIX (AI pipeline co the chay 30s+ khi LLM cold-start).
-        // - LockDuration = 5 phut (gia tri max ma Azure Service Bus cho phep).
-        //   QUAN TRONG: setting nay chi co tac dung khi queue chua ton tai
-        //   (luc MassTransit auto-create). Neu queue da co, can xoa de re-create
-        //   hoac chinh tay trong Azure portal. -> xem doc/POC-RESILIENCE.md.
-        // - MaxAutoRenewDuration = 15 phut: MassTransit auto-renew lock runtime,
-        //   khong can recreate queue. Day la fix "an toan" cho dev env.
-        // - MaxDeliveryCount = 5: sau 5 lan delivery fail, ASB tu chuyen DLQ.
-        // ---------------------------------------------------------------------
         if (endpointConfigurator is IServiceBusReceiveEndpointConfigurator sb)
         {
             sb.LockDuration = TimeSpan.FromMinutes(5);
             sb.MaxAutoRenewDuration = TimeSpan.FromMinutes(15);
             sb.MaxDeliveryCount = 5;
-
-            // Default MassTransit chuyen message faulted vao queue phu '_error'.
-            // Bat cau hinh nay de chuyen sang ASB native Dead-Letter Queue ($DeadLetterQueue
-            // cua chinh queue run-ai-pipeline). Loi the:
-            //   - Inspect bang Azure Portal / Service Bus Explorer tu nhien.
-            //   - Co the resubmit qua tooling chuan.
-            //   - Don gian cho operator: 1 cho de tim message poison.
             sb.ConfigureDeadLetterQueueErrorTransport();
             sb.ConfigureDeadLetterQueueDeadLetterTransport();
         }

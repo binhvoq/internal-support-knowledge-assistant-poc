@@ -25,6 +25,7 @@ builder.Services.AddMassTransit(mt =>
     mt.AddConsumer<MarkTicketAnalyzingConsumer, MarkTicketAnalyzingConsumerDefinition>();
     mt.AddConsumer<SaveTicketSuggestionConsumer, SaveTicketSuggestionConsumerDefinition>();
     mt.AddConsumer<CompensateMarkAnalyzingConsumer, CompensateMarkAnalyzingConsumerDefinition>();
+    mt.AddConsumer<RecordAiPipelineDraftConsumer, RecordAiPipelineDraftConsumerDefinition>();
 
     // Transactional Outbox: HTTP POST /tickets se Publish ITicketCreated qua outbox
     // -> ghi cung transaction voi TicketEntity -> khong con dual-write.
@@ -60,7 +61,7 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<TicketDbContext>();
     await db.Database.EnsureCreatedAsync();
-    await TicketDbSchema.EnsureSagaEpochColumnsAsync(db);
+    await TicketDbSchema.EnsureSagaEpochColumnsAsync(db); // includes AiDraft columns
     // IdempotencyRecords + Ticket + MassTransit Outbox/Inbox tables tu sinh.
 }
 
@@ -208,7 +209,15 @@ app.MapGet("/internal/tickets/{id}/saga-progress", async (string id, TicketDbCon
         status = entity.Status,
         sagaEpoch = entity.SagaEpoch,
         activeSagaCorrelationId = entity.ActiveSagaCorrelationId,
-        hasSuggestion = !string.IsNullOrWhiteSpace(entity.AiSuggestedAnswer)
+        hasSuggestion = !string.IsNullOrWhiteSpace(entity.AiSuggestedAnswer),
+        hasAiDraft = !string.IsNullOrWhiteSpace(entity.AiDraftSuggestion)
+            && entity.AiDraftCorrelationId is not null
+            && entity.AiDraftSagaEpoch is not null,
+        aiDraftCorrelationId = entity.AiDraftCorrelationId,
+        aiDraftSagaEpoch = entity.AiDraftSagaEpoch,
+        aiDraftCategory = entity.AiDraftCategory,
+        aiDraftSuggestion = entity.AiDraftSuggestion,
+        aiDraftRelatedDocumentsJson = entity.AiDraftRelatedDocumentsJson
     });
 });
 

@@ -3,6 +3,7 @@ using SupportPoc.Shared.Contracts;
 using SupportPoc.Shared.Models;
 using SupportPoc.Shared.Testing;
 using SupportPoc.TicketService.Data;
+using SupportPoc.TicketService.Services;
 
 namespace SupportPoc.TicketService.Consumers;
 
@@ -52,6 +53,7 @@ public sealed class CompensateMarkAnalyzingConsumer : IConsumer<ICompensateMarkA
             ticket.Category = string.Empty;
             ticket.AiSuggestedAnswer = null;
             ticket.RelatedDocumentsJson = "[]";
+            TicketAiDraftHelper.ClearDraft(ticket);
             ticket.ActiveSagaCorrelationId = null;
             ticket.SagaEpoch++;
             ticket.UpdatedAt = DateTimeOffset.UtcNow;

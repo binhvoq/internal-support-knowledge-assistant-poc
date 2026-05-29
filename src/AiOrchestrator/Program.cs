@@ -95,6 +95,7 @@ builder.Services.AddMassTransit(mt =>
             EndpointConvention.Map<IMarkTicketAnalyzing>(new Uri("queue:mark-ticket-analyzing"));
             EndpointConvention.Map<ISaveTicketSuggestion>(new Uri("queue:save-ticket-suggestion"));
             EndpointConvention.Map<ICompensateMarkAnalyzing>(new Uri("queue:compensate-mark-analyzing"));
+            EndpointConvention.Map<IRecordAiPipelineDraft>(new Uri("queue:record-ai-pipeline-draft"));
             // Internal command:
             EndpointConvention.Map<IRunAiPipeline>(new Uri("queue:run-ai-pipeline"));
 
@@ -114,6 +115,7 @@ builder.Services.AddMassTransit(mt =>
             EndpointConvention.Map<IMarkTicketAnalyzing>(new Uri("queue:mark-ticket-analyzing"));
             EndpointConvention.Map<ISaveTicketSuggestion>(new Uri("queue:save-ticket-suggestion"));
             EndpointConvention.Map<ICompensateMarkAnalyzing>(new Uri("queue:compensate-mark-analyzing"));
+            EndpointConvention.Map<IRecordAiPipelineDraft>(new Uri("queue:record-ai-pipeline-draft"));
             EndpointConvention.Map<IRunAiPipeline>(new Uri("queue:run-ai-pipeline"));
 
             cfg.UseDelayedMessageScheduler();

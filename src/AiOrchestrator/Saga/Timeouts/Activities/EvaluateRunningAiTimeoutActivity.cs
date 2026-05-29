@@ -67,6 +67,14 @@ public sealed class EvaluateRunningAiTimeoutActivity :
 
             var decision = await _evaluator.EvaluateAsync(timeoutContext, context.CancellationToken);
 
+            if (decision.Outcome == SagaTimeoutOutcome.Proceed
+                && !string.IsNullOrWhiteSpace(decision.RecoveredSuggestion))
+            {
+                saga.Category = decision.RecoveredCategory;
+                saga.Suggestion = decision.RecoveredSuggestion;
+                saga.RelatedDocumentsJson = decision.RecoveredRelatedDocumentsJson ?? "[]";
+            }
+
             saga.PendingTimeoutOutcome = decision.Outcome.ToString();
             saga.TimeoutDecisionReason = decision.Reason;
             saga.TimeoutVerifyAttempts++;

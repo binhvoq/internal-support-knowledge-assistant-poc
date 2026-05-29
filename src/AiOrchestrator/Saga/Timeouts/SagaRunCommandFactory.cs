@@ -10,6 +10,7 @@ public static class SagaRunCommandFactory
         new(
             saga.CorrelationId,
             saga.TicketId,
+            saga.TicketSagaEpoch,
             saga.Question,
             saga.Category ?? SupportCategory.Other);
 }

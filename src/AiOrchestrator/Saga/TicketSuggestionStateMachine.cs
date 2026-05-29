@@ -108,6 +108,7 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                 .Send(ctx => new RunAiPipeline(
                     ctx.Saga.CorrelationId,
                     ctx.Saga.TicketId,
+                    ctx.Saga.TicketSagaEpoch,
                     ctx.Saga.Question,
                     ctx.Saga.Category ?? SupportCategory.Other))
                 .TransitionTo(RunningAi),
@@ -318,6 +319,7 @@ internal static class AnalyzingTimeoutStateMachineExtensions
                 .Send(ctx => new RunAiPipeline(
                     ctx.Saga.CorrelationId,
                     ctx.Saga.TicketId,
+                    ctx.Saga.TicketSagaEpoch,
                     ctx.Saga.Question,
                     ctx.Saga.Category ?? SupportCategory.Other))
                 .TransitionTo(machine.RunningAi))
