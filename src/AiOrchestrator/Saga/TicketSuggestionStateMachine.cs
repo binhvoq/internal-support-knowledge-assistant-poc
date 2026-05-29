@@ -16,9 +16,11 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
     public State RunningAi { get; private set; } = null!;
     public State Saving { get; private set; } = null!;
     public State Compensating { get; private set; } = null!;
+    public State RevertingBeforeFailed { get; private set; } = null!;
     public State Completed { get; private set; } = null!;
     public State Failed { get; private set; } = null!;
     public State Compensated { get; private set; } = null!;
+    public State RollbackFailed { get; private set; } = null!;
 
     public Event<ITicketCreated> TicketCreated { get; private set; } = null!;
 
@@ -114,14 +116,7 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                 .TransitionTo(RunningAi),
 
             When(AnalyzingMarkFailed)
-                .Then(ctx =>
-                {
-                    ctx.Saga.FailureReason = ctx.Message.Reason;
-                    ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
-                })
-                .UnscheduleAllStepTimeouts(this)
-                .Unschedule(VerifyDue)
-                .TransitionTo(Failed),
+                .ApplyRevertBeforeFailed(this, ctx => ctx.Message.Reason),
 
             When(StepTimeout.Received)
                 .Activity(x => x.OfType<EvaluateAnalyzingTimeoutActivity>())
@@ -225,6 +220,21 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                 .Activity(x => x.OfType<EvaluateCompensatingTimeoutActivity>())
                 .ApplyCompensatingTimeoutOutcomeBranches(this));
 
+        During(RevertingBeforeFailed,
+            When(MarkAnalyzingReverted)
+                .Then(ctx => ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow)
+                .UnscheduleAllStepTimeouts(this)
+                .Unschedule(VerifyDue)
+                .TransitionTo(Failed),
+
+            When(StepTimeout.Received)
+                .Activity(x => x.OfType<EvaluateCompensatingTimeoutActivity>())
+                .ApplyRevertingBeforeFailedTimeoutOutcomeBranches(this),
+
+            When(VerifyDue.Received)
+                .Activity(x => x.OfType<EvaluateCompensatingTimeoutActivity>())
+                .ApplyRevertingBeforeFailedTimeoutOutcomeBranches(this));
+
         DuringAny(
             Ignore(MarkAnalyzingReverted),
             Ignore(AnalyzingMarked),
@@ -290,12 +300,12 @@ internal static class CompensatingTimeoutStateMachineExtensions
             .If(ctx => SagaTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.Fail), b => b
                 .Then(ctx =>
                 {
-                    ctx.Saga.FailureReason = ctx.Saga.TimeoutDecisionReason;
+                    ctx.Saga.FailureReason = $"Failed to confirm compensation rollback: {ctx.Saga.TimeoutDecisionReason}";
                     ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
                 })
                 .UnscheduleAllStepTimeouts(machine)
                 .Unschedule(machine.VerifyDue)
-                .TransitionTo(machine.Failed));
+                .TransitionTo(machine.RollbackFailed));
     }
 }
 
@@ -342,14 +352,7 @@ internal static class AnalyzingTimeoutStateMachineExtensions
                 .Schedule(machine.VerifyDue, ctx => new SagaVerifyDue(ctx.Saga.CorrelationId, ctx.Saga.TicketId)))
 
             .If(ctx => SagaTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.Fail), b => b
-                .Then(ctx =>
-                {
-                    ctx.Saga.FailureReason = ctx.Saga.TimeoutDecisionReason;
-                    ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
-                })
-                .UnscheduleAllStepTimeouts(machine)
-                .Unschedule(machine.VerifyDue)
-                .TransitionTo(machine.Failed));
+                .ApplyRevertBeforeFailed(machine));
     }
 }
 
@@ -410,14 +413,7 @@ internal static class RunningAiTimeoutStateMachineExtensions
                 .TransitionTo(machine.Compensating))
 
             .If(ctx => SagaTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.Fail), b => b
-                .Then(ctx =>
-                {
-                    ctx.Saga.FailureReason = ctx.Saga.TimeoutDecisionReason;
-                    ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
-                })
-                .UnscheduleAllStepTimeouts(machine)
-                .Unschedule(machine.VerifyDue)
-                .TransitionTo(machine.Failed));
+                .ApplyRevertBeforeFailed(machine));
     }
 }
 
@@ -467,13 +463,6 @@ internal static class SavingTimeoutStateMachineExtensions
                 .TransitionTo(machine.Compensating))
 
             .If(ctx => SagaTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.Fail), b => b
-                .Then(ctx =>
-                {
-                    ctx.Saga.FailureReason = ctx.Saga.TimeoutDecisionReason;
-                    ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
-                })
-                .UnscheduleAllStepTimeouts(machine)
-                .Unschedule(machine.VerifyDue)
-                .TransitionTo(machine.Failed));
+                .ApplyRevertBeforeFailed(machine));
     }
 }

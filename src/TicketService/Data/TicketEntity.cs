@@ -19,6 +19,8 @@ public sealed class TicketEntity
     /// <summary>So phien saga; tang khi Mark thanh cong va khi Compensate.</summary>
     public int SagaEpoch { get; set; }
     public Guid? ActiveSagaCorrelationId { get; set; }
+    /// <summary>Ghi chu khi saga Failed va revert ticket (vd. AI timeout).</summary>
+    public string? SagaStopNote { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 }

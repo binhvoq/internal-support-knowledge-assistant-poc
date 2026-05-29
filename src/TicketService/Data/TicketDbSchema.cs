@@ -59,5 +59,10 @@ internal static class TicketDbSchema
             await db.Database.ExecuteSqlRawAsync(
                 "ALTER TABLE Tickets ADD COLUMN AiDraftSagaEpoch INTEGER NULL",
                 cancellationToken);
+
+        if (!columns.Contains("SagaStopNote"))
+            await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE Tickets ADD COLUMN SagaStopNote TEXT NULL",
+                cancellationToken);
     }
 }

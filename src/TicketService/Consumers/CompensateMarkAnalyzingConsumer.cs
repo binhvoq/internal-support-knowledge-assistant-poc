@@ -34,6 +34,13 @@ public sealed class CompensateMarkAnalyzingConsumer : IConsumer<ICompensateMarkA
 
         if (IsAlreadyReverted(ticket, msg))
         {
+            if (!string.IsNullOrWhiteSpace(msg.SagaStopNote))
+            {
+                ticket.SagaStopNote = msg.SagaStopNote;
+                ticket.UpdatedAt = DateTimeOffset.UtcNow;
+                await _db.SaveChangesAsync(context.CancellationToken);
+            }
+
             _logger.LogInformation(
                 "Compensate idempotent: ticket already reverted. TicketId={TicketId} SagaId={SagaId} Status={Status}",
                 msg.TicketId,
@@ -56,6 +63,8 @@ public sealed class CompensateMarkAnalyzingConsumer : IConsumer<ICompensateMarkA
             TicketAiDraftHelper.ClearDraft(ticket);
             ticket.ActiveSagaCorrelationId = null;
             ticket.SagaEpoch++;
+            if (!string.IsNullOrWhiteSpace(msg.SagaStopNote))
+                ticket.SagaStopNote = msg.SagaStopNote;
             ticket.UpdatedAt = DateTimeOffset.UtcNow;
 
             _logger.LogInformation(

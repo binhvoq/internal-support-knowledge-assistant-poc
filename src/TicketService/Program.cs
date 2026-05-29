@@ -217,7 +217,8 @@ app.MapGet("/internal/tickets/{id}/saga-progress", async (string id, TicketDbCon
         aiDraftSagaEpoch = entity.AiDraftSagaEpoch,
         aiDraftCategory = entity.AiDraftCategory,
         aiDraftSuggestion = entity.AiDraftSuggestion,
-        aiDraftRelatedDocumentsJson = entity.AiDraftRelatedDocumentsJson
+        aiDraftRelatedDocumentsJson = entity.AiDraftRelatedDocumentsJson,
+        sagaStopNote = entity.SagaStopNote
     });
 });
 

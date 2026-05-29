@@ -93,6 +93,8 @@ public interface ICompensateMarkAnalyzing
     string TicketId { get; }
     // Trang thai goc truoc khi PATCH "Analyzing" - de revert chinh xac.
     string OriginalStatus { get; }
+    /// <summary>Ghi chu tren ticket khi saga Failed (revert ve trang thai chap nhan duoc).</summary>
+    string? SagaStopNote { get; }
 }
 
 // =========================
@@ -181,7 +183,11 @@ public sealed record AiSuggestionGenerated(Guid CorrelationId, string TicketId) 
 
 public sealed record MarkTicketAnalyzing(Guid CorrelationId, string TicketId, int ExpectedEpoch) : IMarkTicketAnalyzing;
 public sealed record SaveTicketSuggestion(Guid CorrelationId, string TicketId, int ExpectedEpoch, string Category, string Suggestion, IReadOnlyList<RelatedDocument> RelatedDocuments) : ISaveTicketSuggestion;
-public sealed record CompensateMarkAnalyzing(Guid CorrelationId, string TicketId, string OriginalStatus) : ICompensateMarkAnalyzing;
+public sealed record CompensateMarkAnalyzing(
+    Guid CorrelationId,
+    string TicketId,
+    string OriginalStatus,
+    string? SagaStopNote = null) : ICompensateMarkAnalyzing;
 
 public sealed record RunAiPipeline(Guid CorrelationId, string TicketId, int ExpectedEpoch, string Question, string Category) : IRunAiPipeline;
 public sealed record RecordAiPipelineDraft(Guid CorrelationId, string TicketId, int ExpectedEpoch, string Category, string Suggestion, IReadOnlyList<RelatedDocument> RelatedDocuments) : IRecordAiPipelineDraft;

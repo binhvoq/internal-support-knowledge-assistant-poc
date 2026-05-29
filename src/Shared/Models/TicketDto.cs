@@ -9,6 +9,7 @@ public sealed class TicketDto
     public required string Status { get; init; }
     public string? AiSuggestedAnswer { get; init; }
     public string? FinalAnswer { get; init; }
+    public string? SagaStopNote { get; init; }
     public IReadOnlyList<RelatedDocument> RelatedDocuments { get; init; } = [];
     public DateTimeOffset CreatedAt { get; init; }
     public DateTimeOffset UpdatedAt { get; init; }

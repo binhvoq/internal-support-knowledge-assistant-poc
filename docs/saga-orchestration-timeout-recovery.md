@@ -8,14 +8,17 @@ Tai lieu tham chieu cho orchestration `TicketSuggestion`: timeout = nghi ngo →
 timeout = suspect → GET /internal/tickets/{id}/saga-progress → policy → outcome
 ```
 
-Event fail ro (`AnalyzingMarkFailed`, `AiPipelineFailed`, `SuggestionSaveFailed`) → compensate ngay, khong probe.
+Event fail ro (`AnalyzingMarkFailed`, `AiPipelineFailed`, `SuggestionSaveFailed`) → compensate ngay, khong probe (`AiPipelineFailed` / `SuggestionSaveFailed` → `Compensating`; `AnalyzingMarkFailed` → `RevertingBeforeFailed`).
+
+Saga `Failed` (timeout probe het / mark fail): chi vao state nay sau khi ticket da revert ve `OriginalStatus` (thuong `New`), co `SagaStopNote`, da clear lock/draft/suggestion va da tang epoch. Event worker muon → ignore.
 
 | Buoc | Outcome timeout |
 |------|-----------------|
 | `Analyzing` | `Proceed`, `ResendMark`, `RetryVerify`, `Fail` |
 | `RunningAi` | `Proceed` (saga payload hoac **AiDraft** tren ticket), `ResendRun`, `RetryVerify`, `Compensate`, `Fail` |
 | `Saving` | `Complete`, `ResendSave`, `RetryVerify`, `Compensate`, `Fail` |
-| `Compensating` | `Complete` → `Compensated`, `ResendCompensate`, `RetryVerify`, `Fail` |
+| `Compensating` | `Complete` → `Compensated`, `ResendCompensate`, `RetryVerify`, `Fail` → `RollbackFailed` |
+| `RevertingBeforeFailed` | `Complete` → `Failed`, `ResendCompensate`, `RetryVerify`, `Fail` → `RollbackFailed` |
 
 MassTransit dung **mot** schedule `StepTimeout` (delay theo buoc); moi state co policy/activity rieng.
 
@@ -25,10 +28,21 @@ MassTransit dung **mot** schedule `StepTimeout` (delay theo buoc); moi state co 
 |-------|---------|
 | Da revert (status goc, khong suggestion, khong owned) | `Complete` → `Compensated` |
 | Van `Analyzing`, owned saga nay | `RetryVerify` / `ResendCompensate` (max 1) |
-| Probe 503/timeout | `RetryVerify` den cap → `Fail` reason **unable to verify** (khong nham voi compensation that bai) |
-| Saga khac / terminal | `Fail` + log |
+| Probe 503/timeout | `RetryVerify` den cap → `RollbackFailed` reason **unable to verify** (khong nham voi compensation that bai) |
+| Saga khac / terminal | `RollbackFailed` + log |
 
 `CompensateMarkAnalyzingConsumer`: ticket **da revert** → publish `MarkAnalyzingReverted`, khong mutate (idempotent).
+
+## RevertingBeforeFailed
+
+State nay dung cho contract: `Failed` = ticket da rollback xong va worker muon da bi chan bang epoch/correlation.
+
+| Event/Probe | Outcome |
+|-------------|---------|
+| `MarkAnalyzingReverted` | `Failed` |
+| Da revert nhung event bi mat | Probe `Complete` → `Failed` |
+| Van `Analyzing`, owned saga nay | `RetryVerify` / `ResendCompensate` |
+| Khong xac nhan duoc rollback | `RollbackFailed` (khong goi la `Failed`) |
 
 ## Log (Azure Monitor)
 

@@ -108,6 +108,7 @@ public sealed class MarkTicketAnalyzingConsumer : IConsumer<IMarkTicketAnalyzing
 
         ticket.ActiveSagaCorrelationId = msg.CorrelationId;
         ticket.SagaEpoch = msg.ExpectedEpoch + 1;
+        ticket.SagaStopNote = null;
         TicketAiDraftHelper.ClearDraft(ticket);
         ticket.UpdatedAt = DateTimeOffset.UtcNow;
     }

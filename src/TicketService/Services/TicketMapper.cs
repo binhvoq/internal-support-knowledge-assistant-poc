@@ -17,6 +17,7 @@ internal static class TicketMapper
         Status = entity.Status,
         AiSuggestedAnswer = entity.AiSuggestedAnswer,
         FinalAnswer = entity.FinalAnswer,
+        SagaStopNote = entity.SagaStopNote,
         RelatedDocuments = JsonSerializer.Deserialize<List<RelatedDocument>>(entity.RelatedDocumentsJson, JsonOptions) ?? [],
         CreatedAt = entity.CreatedAt,
         UpdatedAt = entity.UpdatedAt
