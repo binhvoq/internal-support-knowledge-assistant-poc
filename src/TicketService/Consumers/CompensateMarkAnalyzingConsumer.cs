@@ -1,6 +1,7 @@
 using MassTransit;
 using SupportPoc.Shared.Contracts;
 using SupportPoc.Shared.Models;
+using SupportPoc.Shared.Testing;
 using SupportPoc.TicketService.Data;
 
 namespace SupportPoc.TicketService.Consumers;
@@ -30,6 +31,18 @@ public sealed class CompensateMarkAnalyzingConsumer : IConsumer<ICompensateMarkA
             return;
         }
 
+        if (IsAlreadyReverted(ticket, msg))
+        {
+            _logger.LogInformation(
+                "Compensate idempotent: ticket already reverted. TicketId={TicketId} SagaId={SagaId} Status={Status}",
+                msg.TicketId,
+                msg.CorrelationId,
+                ticket.Status);
+            await context.Publish<IMarkAnalyzingReverted>(new MarkAnalyzingReverted(msg.CorrelationId, msg.TicketId));
+            return;
+        }
+
+        var skipRevertEvent = ticket.Question.Has(FaultInjection.ForceSkipCompensateRevertedEvent);
         var ownsTicket = ticket.ActiveSagaCorrelationId == msg.CorrelationId;
         if (ownsTicket)
         {
@@ -49,18 +62,40 @@ public sealed class CompensateMarkAnalyzingConsumer : IConsumer<ICompensateMarkA
                 oldStatus,
                 targetStatus,
                 ticket.SagaEpoch);
-        }
-        else
-        {
-            _logger.LogWarning(
-                "Compensate skip DB mutate TicketId={TicketId} activeSaga={Active} msgSaga={MsgSaga}",
-                msg.TicketId,
-                ticket.ActiveSagaCorrelationId,
-                msg.CorrelationId);
+
+            if (!skipRevertEvent)
+                await context.Publish<IMarkAnalyzingReverted>(new MarkAnalyzingReverted(msg.CorrelationId, msg.TicketId));
+
+            await _db.SaveChangesAsync(context.CancellationToken);
+
+            if (skipRevertEvent)
+            {
+                _logger.LogWarning(
+                    "FaultInjection: ForceSkipCompensateRevertedEvent -> reverted DB but skipped MarkAnalyzingReverted publish. TicketId={TicketId}",
+                    msg.TicketId);
+            }
+
+            return;
         }
 
-        await context.Publish<IMarkAnalyzingReverted>(new MarkAnalyzingReverted(msg.CorrelationId, msg.TicketId));
-        await _db.SaveChangesAsync(context.CancellationToken);
+        _logger.LogWarning(
+            "Compensate skip: ticket not owned and not in reverted shape — no MarkAnalyzingReverted. TicketId={TicketId} activeSaga={Active} msgSaga={MsgSaga} Status={Status}",
+            msg.TicketId,
+            ticket.ActiveSagaCorrelationId,
+            msg.CorrelationId,
+            ticket.Status);
+    }
+
+    private static bool IsAlreadyReverted(TicketEntity ticket, ICompensateMarkAnalyzing msg)
+    {
+        var targetStatus = string.IsNullOrWhiteSpace(msg.OriginalStatus) ? TicketStatus.New : msg.OriginalStatus;
+        if (ticket.Status != targetStatus)
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(ticket.AiSuggestedAnswer))
+            return false;
+
+        return ticket.ActiveSagaCorrelationId != msg.CorrelationId;
     }
 }
 

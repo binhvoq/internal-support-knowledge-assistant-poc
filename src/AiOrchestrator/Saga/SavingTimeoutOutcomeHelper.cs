@@ -3,7 +3,7 @@ using SupportPoc.AiOrchestrator.Saga.Timeouts.Core;
 
 namespace SupportPoc.AiOrchestrator.Saga;
 
-internal static class SavingTimeoutOutcomeHelper
+internal static class SagaTimeoutOutcomeHelper
 {
     public static bool Is(BehaviorContext<TicketSuggestionState> context, SagaTimeoutOutcome outcome) =>
         string.Equals(

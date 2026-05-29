@@ -7,11 +7,14 @@ using SupportPoc.Shared.Models;
 
 namespace SupportPoc.AiOrchestrator.Saga.Timeouts.Policies;
 
-public sealed class SavingTimeoutPolicy(IOptions<SagaTimeoutOptions> options)
+public sealed class RunningAiTimeoutPolicy(IOptions<SagaTimeoutOptions> options)
 {
     public SagaTimeoutDecision Decide(TicketProgressProbeResult probe, StepTimeoutContext ctx)
     {
-        var step = options.Value.Saving;
+        var step = options.Value.RunningAi;
+
+        if (HasAiPayload(ctx.Saga))
+            return SagaTimeoutDecision.Proceed("AI payload already present on saga state", ctx.Saga.TicketSagaEpoch);
 
         return probe.Status switch
         {
@@ -39,17 +42,13 @@ public sealed class SavingTimeoutPolicy(IOptions<SagaTimeoutOptions> options)
     {
         var saga = ctx.Saga;
 
-        if (IsSavedForThisSaga(ticket, saga))
-            return SagaTimeoutDecision.Complete("Save already applied at TicketService (source of truth)");
-
-        if (ticket.ActiveSagaCorrelationId is not null &&
-            ticket.ActiveSagaCorrelationId != saga.CorrelationId)
+        if (ticket.ActiveSagaCorrelationId != saga.CorrelationId)
         {
             return SagaTimeoutDecision.Fail(
                 $"Ticket owned by another saga: active={ticket.ActiveSagaCorrelationId}, expected={saga.CorrelationId}");
         }
 
-        if (!IsExpectedEpoch(ticket, saga))
+        if (ticket.SagaEpoch != saga.TicketSagaEpoch)
         {
             return SagaTimeoutDecision.Fail(
                 $"Unexpected epoch: ticket={ticket.SagaEpoch}, saga={saga.TicketSagaEpoch}");
@@ -58,7 +57,7 @@ public sealed class SavingTimeoutPolicy(IOptions<SagaTimeoutOptions> options)
         if (ticket.Status is TicketStatus.Suggested or TicketStatus.Resolved)
         {
             return SagaTimeoutDecision.Fail(
-                $"Unexpected status after ownership match: {ticket.Status} without matching suggestion snapshot");
+                $"Unexpected terminal status during RunningAi: {ticket.Status}");
         }
 
         if (ticket.Status != TicketStatus.Analyzing)
@@ -72,31 +71,25 @@ public sealed class SavingTimeoutPolicy(IOptions<SagaTimeoutOptions> options)
             if (ctx.PostResendVerifyAttempt < step.PostResendVerifyAttempts)
             {
                 return SagaTimeoutDecision.RetryVerify(
-                    $"Post-resend verify {ctx.PostResendVerifyAttempt + 1}/{step.PostResendVerifyAttempts}");
+                    $"Post-resend AI verify {ctx.PostResendVerifyAttempt + 1}/{step.PostResendVerifyAttempts}");
             }
 
+            if (ctx.ResendCount < step.MaxResendAttempts)
+                return SagaTimeoutDecision.ResendRun("Post-resend grace exhausted; resend RunAiPipeline");
+
             return SagaTimeoutDecision.Compensate(
-                "Post-resend grace exhausted; save still not visible at source of truth");
+                $"AI resend limit ({step.MaxResendAttempts}) exhausted; payload still missing");
         }
 
         if (ctx.VerifyAttempt < step.MaxVerifyAttempts)
         {
             return SagaTimeoutDecision.RetryVerify(
-                $"Pre-resend verify {ctx.VerifyAttempt + 1}/{step.MaxVerifyAttempts}");
+                $"Pre-resend AI verify {ctx.VerifyAttempt + 1}/{step.MaxVerifyAttempts}");
         }
 
-        if (!SagaSaveCommandFactory.CanCreate(saga, out var reason))
-            return SagaTimeoutDecision.Fail(reason);
-
-        return SagaTimeoutDecision.ResendSave("Pre-resend verify attempts exhausted; resend SaveTicketSuggestion");
+        return SagaTimeoutDecision.ResendRun("Pre-resend verify attempts exhausted; resend RunAiPipeline");
     }
 
-    private static bool IsSavedForThisSaga(TicketProgressSnapshot ticket, TicketSuggestionState saga) =>
-        ticket.Status == TicketStatus.Suggested
-        && ticket.SagaEpoch == saga.TicketSagaEpoch
-        && ticket.HasSuggestion
-        && (ticket.ActiveSagaCorrelationId is null || ticket.ActiveSagaCorrelationId == saga.CorrelationId);
-
-    private static bool IsExpectedEpoch(TicketProgressSnapshot ticket, TicketSuggestionState saga) =>
-        ticket.SagaEpoch == saga.TicketSagaEpoch;
+    private static bool HasAiPayload(TicketSuggestionState saga) =>
+        !string.IsNullOrWhiteSpace(saga.Category) && !string.IsNullOrWhiteSpace(saga.Suggestion);
 }

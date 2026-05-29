@@ -7,25 +7,25 @@ using SupportPoc.Shared.Contracts;
 
 namespace SupportPoc.AiOrchestrator.Saga.Timeouts.Activities;
 
-public sealed class EvaluateSavingTimeoutActivity :
+public sealed class EvaluateCompensatingTimeoutActivity :
     IStateMachineActivity<TicketSuggestionState, ISagaTimeoutExpired>,
     IStateMachineActivity<TicketSuggestionState, ISagaVerifyDue>
 {
-    private readonly ISavingTimeoutEvaluator _evaluator;
+    private readonly ICompensatingTimeoutEvaluator _evaluator;
     private readonly SagaTimeoutOptions _options;
-    private readonly ILogger<EvaluateSavingTimeoutActivity> _logger;
+    private readonly ILogger<EvaluateCompensatingTimeoutActivity> _logger;
 
-    public EvaluateSavingTimeoutActivity(
-        ISavingTimeoutEvaluator evaluator,
+    public EvaluateCompensatingTimeoutActivity(
+        ICompensatingTimeoutEvaluator evaluator,
         IOptions<SagaTimeoutOptions> options,
-        ILogger<EvaluateSavingTimeoutActivity> logger)
+        ILogger<EvaluateCompensatingTimeoutActivity> logger)
     {
         _evaluator = evaluator;
         _options = options.Value;
         _logger = logger;
     }
 
-    public void Probe(ProbeContext context) => context.CreateScope("evaluateSavingTimeout");
+    public void Probe(ProbeContext context) => context.CreateScope("evaluateCompensatingTimeout");
 
     public void Accept(StateMachineVisitor visitor) => visitor.Visit(this);
 
@@ -60,10 +60,10 @@ public sealed class EvaluateSavingTimeoutActivity :
         {
             var timeoutContext = new StepTimeoutContext(
                 saga,
-                _options.Saving,
+                _options.Compensating,
                 saga.TimeoutVerifyAttempts,
                 saga.PostResendVerifyAttempts,
-                saga.SaveResendIssued ? 1 : 0);
+                saga.CompensateResendCount);
 
             var decision = await _evaluator.EvaluateAsync(timeoutContext, context.CancellationToken);
 
@@ -71,18 +71,37 @@ public sealed class EvaluateSavingTimeoutActivity :
             saga.TimeoutDecisionReason = decision.Reason;
             saga.TimeoutVerifyAttempts++;
 
-            if (saga.SaveResendIssued)
+            if (saga.CompensateResendCount > 0)
                 saga.PostResendVerifyAttempts++;
 
             saga.UpdatedAt = DateTimeOffset.UtcNow;
 
             _logger.LogInformation(
-                "Saving timeout evaluated SagaId={SagaId} Outcome={Outcome} Reason={Reason} VerifyAttempts={Attempts} PostResend={PostResend}",
+                "Compensating timeout evaluated SagaId={SagaId} Outcome={Outcome} Reason={Reason} VerifyAttempts={Attempts} CompensateResends={Resends} PostResend={PostResend}",
                 saga.CorrelationId,
                 decision.Outcome,
                 decision.Reason,
                 saga.TimeoutVerifyAttempts,
+                saga.CompensateResendCount,
                 saga.PostResendVerifyAttempts);
+
+            if (decision.Outcome == SagaTimeoutOutcome.Fail)
+            {
+                var probeError = IsProbeVerificationFailure(decision.Reason)
+                    ? decision.Reason
+                    : null;
+                SagaCompensationDiagnostics.LogCompensationFailed(_logger, saga, decision.Reason, probeError);
+            }
+            else if (decision.Outcome == SagaTimeoutOutcome.RetryVerify &&
+                     IsProbeVerificationFailure(decision.Reason))
+            {
+                SagaCompensationDiagnostics.LogProbeUnavailable(
+                    _logger,
+                    saga,
+                    decision.Reason,
+                    saga.TimeoutVerifyAttempts,
+                    _options.Compensating.MaxVerifyAttempts);
+            }
         }
         catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
         {
@@ -90,12 +109,17 @@ public sealed class EvaluateSavingTimeoutActivity :
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Saving timeout evaluate failed SagaId={SagaId}", saga.CorrelationId);
+            _logger.LogError(ex, "Compensating timeout evaluate failed SagaId={SagaId}", saga.CorrelationId);
             saga.PendingTimeoutOutcome = SagaTimeoutOutcome.Fail.ToString();
             saga.TimeoutDecisionReason = $"Evaluate error: {ex.Message}";
             saga.UpdatedAt = DateTimeOffset.UtcNow;
+            SagaCompensationDiagnostics.LogCompensationFailed(_logger, saga, saga.TimeoutDecisionReason, ex.Message);
         }
 
         await next.Execute(context);
     }
+
+    private static bool IsProbeVerificationFailure(string reason) =>
+        reason.Contains("unavailable", StringComparison.OrdinalIgnoreCase)
+        || reason.Contains("unable to verify", StringComparison.OrdinalIgnoreCase);
 }

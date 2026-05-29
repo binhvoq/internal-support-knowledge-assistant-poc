@@ -1,151 +1,103 @@
-# Saga orchestration timeout recovery
+# Saga timeout recovery
 
-This note documents the design intent behind timeout recovery in the
-MassTransit saga orchestration. It is written for future maintainers and AI
-agents that need to explain or extend the saga without rediscovering the
-timeout/compensation problem.
+Tai lieu tham chieu cho orchestration `TicketSuggestion`: timeout = nghi ngo → probe TicketService → policy → outcome. Khong compensate/fail mu.
 
-Current implementation scope: phase 1 fixes only the `Saving` timeout path in
-the `TicketSuggestionStateMachine`. `Analyzing`, `RunningAi`, and
-`Compensating` keep their previous timeout behavior.
-
-## Core idea
-
-The old `Saving` timeout path sent `CompensateMarkAnalyzing` immediately when
-`TicketSuggestionSaved` did not arrive before the saga timeout. That is unsafe in
-a distributed system:
-
-1. `SaveTicketSuggestionConsumer` can commit the ticket as `Suggested`.
-2. The `TicketSuggestionSaved` event can arrive after the saga timeout.
-3. If the saga compensates immediately, it can delete a valid AI suggestion.
-
-The intended semantics for saga timeout handling are:
+## Nguyen tac
 
 ```text
-timeout = suspect, not proof of failure
-suspect -> verify source of truth -> deterministic decision
+timeout = suspect → GET /internal/tickets/{id}/saga-progress → policy → outcome
 ```
 
-`SagaEpoch`, Inbox, and Outbox are still useful, but they do not prove that the
-save step did not commit. The missing layer is a business verification step
-against `TicketService`, which is the source of truth for ticket state.
+Event fail ro (`AnalyzingMarkFailed`, `AiPipelineFailed`, `SuggestionSaveFailed`) → compensate ngay, khong probe.
 
-## Implementation map
+| Buoc | Outcome timeout |
+|------|-----------------|
+| `Analyzing` | `Proceed`, `ResendMark`, `RetryVerify`, `Fail` |
+| `RunningAi` | `Proceed`, `ResendRun`, `RetryVerify`, `Compensate`, `Fail` |
+| `Saving` | `Complete`, `ResendSave`, `RetryVerify`, `Compensate`, `Fail` |
+| `Compensating` | `Complete` → `Compensated`, `ResendCompensate`, `RetryVerify`, `Fail` |
 
-```text
-Saving
-  StepTimeout / VerifyDue
-    -> EvaluateSavingTimeoutActivity
-    -> ISavingTimeoutEvaluator
-    -> ITicketProgressProbe
-    -> SavingTimeoutPolicy
-    -> PendingTimeoutOutcome on saga
-    -> TicketSuggestionStateMachine branches explicitly
-```
+MassTransit dung **mot** schedule `StepTimeout` (delay theo buoc); moi state co policy/activity rieng.
 
-Responsibilities:
+## Compensating
 
-| Component | Responsibility |
-|---|---|
-| `TicketSuggestionStateMachine` | Correlation, schedules, visible transitions, send/publish commands. |
-| `EvaluateSavingTimeoutActivity` | Resolve scoped services, evaluate timeout, write outcome/reason/counters to saga. No send, no transition. |
-| `HttpTicketProgressProbe` | Read `GET /internal/tickets/{id}/saga-progress`; convert failures to `TicketProgressProbeResult`. |
-| `SavingTimeoutPolicy` | Pure decision logic from probe result + saga state. |
-| `SagaSaveCommandFactory` | Rebuild `SaveTicketSuggestion` from saga payload for resend. |
+| Probe | Outcome |
+|-------|---------|
+| Da revert (status goc, khong suggestion, khong owned) | `Complete` → `Compensated` |
+| Van `Analyzing`, owned saga nay | `RetryVerify` / `ResendCompensate` (max 1) |
+| Probe 503/timeout | `RetryVerify` den cap → `Fail` reason **unable to verify** (khong nham voi compensation that bai) |
+| Saga khac / terminal | `Fail` + log |
 
-`StepTimeout` and `VerifyDue` are deliberately separate schedules:
+`CompensateMarkAnalyzingConsumer`: ticket **da revert** → publish `MarkAnalyzingReverted`, khong mutate (idempotent).
 
-| Schedule | Delay | Token |
-|---|---|---|
-| `StepTimeout` | `Saga:TimeoutSeconds` | `TimeoutTokenId` |
-| `VerifyDue` | `Saga:VerifyRetrySeconds` | `VerifyTimeoutTokenId` |
+## Log (Azure Monitor)
 
-Do not reuse the long step timeout for short verify retries.
+| EventName | Level | Khi |
+|-----------|-------|-----|
+| `SagaCompensationFailed` | Error | Verify → `Fail` (that bai / probe het retry) |
+| `SagaCompensationProbeUnavailable` | Warning | Probe retry trong Compensating |
 
-## Saving timeout outcomes
+Fields: `SagaId`, `TicketId`, `Reason`, `ProbeError`, `VerifyAttempts`, `CompensateResendCount`.
 
-| Outcome | State machine action |
-|---|---|
-| `Complete` | Unschedule timeout tokens, publish `IAiSuggestionGenerated`, transition `Completed`. |
-| `RetryVerify` | Schedule `VerifyDue`, remain in `Saving`. |
-| `ResendSave` | Mark `SaveResendIssued`, send `SaveTicketSuggestion`, schedule `VerifyDue`, remain in `Saving`. |
-| `Compensate` | Only after post-resend grace verifies save still did not apply; send `CompensateMarkAnalyzing`, transition `Compensating`. |
-| `Fail` | Unschedule timeout tokens, write reason, transition `Failed`. |
+## Config
 
-Hard invariants:
+`appsettings.json` — prod-like timeout. `appsettings.Development.json` — timeout ngan + log `SupportPoc.AiOrchestrator.Saga` = Debug.
 
-- No `Saving` timeout path may send `CompensateMarkAnalyzing` before probe/policy evaluation.
-- `Unknown`, `unexpected`, `probe unavailable after retries`, wrong owner, or wrong epoch must go to `Fail`, not `Compensate`.
-- `ResendSave` must never compensate in the same cycle. It must schedule `VerifyDue` first.
-- `Compensate` is allowed only when the probe returns `Found`, the ticket still belongs to this saga, epoch matches, status is `Analyzing`, no suggestion exists, and post-resend grace is exhausted.
-- Probe/network/parse failures should become `TicketProgressProbeResult`, so policy decides. They should not create blind MassTransit retry loops.
-- Cancellation from shutdown/request cancellation can still bubble.
-
-## SavingTimeoutPolicy summary
-
-For `Found` ticket snapshots:
-
-| Ticket state | Outcome |
-|---|---|
-| `Suggested`, correct `ActiveSagaCorrelationId`, correct `SagaEpoch`, `HasSuggestion=true` | `Complete` |
-| `Analyzing`, correct owner/epoch, no suggestion, before max verify attempts | `RetryVerify` |
-| `Analyzing`, correct owner/epoch, no suggestion, max pre-resend attempts exhausted, valid saga payload | `ResendSave` |
-| `Analyzing`, correct owner/epoch, no suggestion, post-resend grace exhausted | `Compensate` |
-| Owned by another saga | `Fail` |
-| Wrong epoch | `Fail` |
-| `Suggested`/`Resolved` without matching this saga's completed snapshot | `Fail` |
-| Any other unexpected status | `Fail` |
-
-For probe statuses:
-
-| Probe status | Outcome |
-|---|---|
-| `NotFound` | `Fail` |
-| `Unavailable` | `RetryVerify` until capped, then `Fail` |
-| `InvalidResponse` | `Fail` |
-
-## Phase 1 boundaries and technical debt
-
-- `TicketService` does not clear `ActiveSagaCorrelationId` after a successful save.
-  The current `Complete` rule therefore checks ownership + epoch. A later phase
-  can add `FinalizeTicketSuggestionSaga` or clear ownership in the save step.
-- Other timeout states are not yet reconciled.
-- This is a POC SQLite setup; schema helpers add columns for existing local DBs.
-  A production service should use normal EF migrations.
-
-## Manual verification cases
-
-Configure short delays for local tests, for example:
-
-```json
-{
-  "Saga": {
-    "TimeoutSeconds": 30,
-    "VerifyRetrySeconds": 5,
-    "MaxVerifyAttempts": 2,
-    "PostResendVerifyAttempts": 1
-  }
-}
-```
-
-| # | Setup | Trigger | Expected |
-|---|---|---|---|
-| 1 | Save committed, `TicketSuggestionSaved` delayed | `StepTimeout` in `Saving` | Probe returns completed snapshot; saga `Completed`; no compensation. |
-| 2 | Save not visible, ticket still `Analyzing`, correct owner/epoch | `StepTimeout` | `RetryVerify`, then `VerifyDue`. |
-| 3 | Pre-resend verifies exhausted and saga payload is valid | `VerifyDue` | `ResendSave`, schedules another `VerifyDue`, remains `Saving`. |
-| 4 | Resend just issued and save is still in-flight | next `VerifyDue` | `RetryVerify`; no compensation in same cycle as resend. |
-| 5 | Post-resend grace exhausted, still `Analyzing`, correct owner/epoch, no suggestion | `VerifyDue` | `Compensate`. |
-| 6 | Probe returns 404 | timeout/verify | `Failed`; no compensation. |
-| 7 | TicketService down / 5xx / network error | timeout/verify | `RetryVerify` capped, then `Failed`; no compensation. |
-| 8 | `ActiveSagaCorrelationId` belongs to another saga | verify | `Failed`; no compensation. |
-| 9 | Wrong epoch or unexpected status | verify | `Failed`; no compensation. |
-| 10 | Saga payload cannot rebuild `SaveTicketSuggestion` | verify after pre-resend attempts | `Failed`; no `.Send(...)` exception loop. |
-| 11 | Activity/evaluator throws a non-cancellation exception | evaluate | Outcome `Fail`; state machine transitions `Failed` deterministically. |
-| 12 | Normal `TicketSuggestionSaved` arrives before timeout | normal event | `Completed`; both schedules unscheduled. |
-
-Useful endpoints:
+## Debug
 
 ```text
 GET http://localhost:5001/internal/tickets/{ticketId}/saga-progress
 GET http://localhost:5003/debug/saga?ticketId={ticketId}
 ```
+
+## Kiem tra
+
+### Unit test (khong can Azure)
+
+```bash
+dotnet test tests/SupportPoc.AiOrchestrator.Tests   # policy 4 buoc + probe unavailable Compensating
+dotnet test tests/SupportPoc.TicketService.Tests      # compensate idempotent already reverted
+```
+
+| Test | Chung minh |
+|------|------------|
+| `Compensating_probe_unavailable_retries_before_fail` | 503 → RetryVerify, het retry → Fail "unable to verify" |
+| `Already_reverted_ticket_publishes_reverted_without_mutating` | Resend compensate khong mutate sai |
+
+### Chay local + Azure
+
+```bash
+bash scripts/azure-resources-start.sh   # neu chua co config
+bash scripts/restart-services.sh
+bash scripts/smoke-test.sh              # happy path E2E
+```
+
+Smoke test khong cover fault injection — chi `New → Suggested → Resolved`.
+
+### Fault injection (API, khong UI)
+
+Gan marker vao `question` khi `POST /tickets`:
+
+| Marker | Muc dich | Saga ky vong |
+|--------|----------|--------------|
+| `__SKIP_MARK__` | Mark DB, skip event | Probe Analyzing → Completed |
+| `__SKIP_SAVE_EVENT__` | Save DB, skip event | Probe Saving → Completed |
+| `__FAIL_AI__` | AI fail | Compensated (event) |
+| `__FAIL_AI__` + `__SKIP_COMPENSATE_EVENT__` | Revert DB, skip event | Probe Compensating → Compensated |
+| `__POISON_AI__` | Uncaught throw | DLQ (chua co unit test) |
+
+Vi du:
+
+```bash
+curl -sf -X POST http://localhost:5001/tickets \
+  -H "Content-Type: application/json" \
+  -d '{"employeeId":"EMP-TEST","category":"IT","question":"VPN __FAIL_AI__ __SKIP_COMPENSATE_EVENT__"}'
+```
+
+Poll saga: `curl "http://localhost:5003/debug/saga?ticketId=TCK-xxx"`
+
+### Pham vi da dong backend
+
+- Policy + probe unavailable Compensating + compensate idempotent: **co unit test**
+- 4 marker chinh tren Azure+local: **da chay tay pass**
+- Chua bat buoc: UI fault panel, `__POISON_AI__` / DLQ, RunningAi resend x2 integration

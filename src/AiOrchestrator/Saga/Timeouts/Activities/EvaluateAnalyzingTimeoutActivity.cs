@@ -7,25 +7,25 @@ using SupportPoc.Shared.Contracts;
 
 namespace SupportPoc.AiOrchestrator.Saga.Timeouts.Activities;
 
-public sealed class EvaluateSavingTimeoutActivity :
+public sealed class EvaluateAnalyzingTimeoutActivity :
     IStateMachineActivity<TicketSuggestionState, ISagaTimeoutExpired>,
     IStateMachineActivity<TicketSuggestionState, ISagaVerifyDue>
 {
-    private readonly ISavingTimeoutEvaluator _evaluator;
+    private readonly IAnalyzingTimeoutEvaluator _evaluator;
     private readonly SagaTimeoutOptions _options;
-    private readonly ILogger<EvaluateSavingTimeoutActivity> _logger;
+    private readonly ILogger<EvaluateAnalyzingTimeoutActivity> _logger;
 
-    public EvaluateSavingTimeoutActivity(
-        ISavingTimeoutEvaluator evaluator,
+    public EvaluateAnalyzingTimeoutActivity(
+        IAnalyzingTimeoutEvaluator evaluator,
         IOptions<SagaTimeoutOptions> options,
-        ILogger<EvaluateSavingTimeoutActivity> logger)
+        ILogger<EvaluateAnalyzingTimeoutActivity> logger)
     {
         _evaluator = evaluator;
         _options = options.Value;
         _logger = logger;
     }
 
-    public void Probe(ProbeContext context) => context.CreateScope("evaluateSavingTimeout");
+    public void Probe(ProbeContext context) => context.CreateScope("evaluateAnalyzingTimeout");
 
     public void Accept(StateMachineVisitor visitor) => visitor.Visit(this);
 
@@ -60,24 +60,27 @@ public sealed class EvaluateSavingTimeoutActivity :
         {
             var timeoutContext = new StepTimeoutContext(
                 saga,
-                _options.Saving,
+                _options.Analyzing,
                 saga.TimeoutVerifyAttempts,
                 saga.PostResendVerifyAttempts,
-                saga.SaveResendIssued ? 1 : 0);
+                saga.MarkResendIssued ? 1 : 0);
 
             var decision = await _evaluator.EvaluateAsync(timeoutContext, context.CancellationToken);
+
+            if (decision.Outcome == SagaTimeoutOutcome.Proceed && decision.ResolvedTicketSagaEpoch is int epoch)
+                saga.TicketSagaEpoch = epoch;
 
             saga.PendingTimeoutOutcome = decision.Outcome.ToString();
             saga.TimeoutDecisionReason = decision.Reason;
             saga.TimeoutVerifyAttempts++;
 
-            if (saga.SaveResendIssued)
+            if (saga.MarkResendIssued)
                 saga.PostResendVerifyAttempts++;
 
             saga.UpdatedAt = DateTimeOffset.UtcNow;
 
             _logger.LogInformation(
-                "Saving timeout evaluated SagaId={SagaId} Outcome={Outcome} Reason={Reason} VerifyAttempts={Attempts} PostResend={PostResend}",
+                "Analyzing timeout evaluated SagaId={SagaId} Outcome={Outcome} Reason={Reason} VerifyAttempts={Attempts} PostResend={PostResend}",
                 saga.CorrelationId,
                 decision.Outcome,
                 decision.Reason,
@@ -90,7 +93,7 @@ public sealed class EvaluateSavingTimeoutActivity :
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Saving timeout evaluate failed SagaId={SagaId}", saga.CorrelationId);
+            _logger.LogError(ex, "Analyzing timeout evaluate failed SagaId={SagaId}", saga.CorrelationId);
             saga.PendingTimeoutOutcome = SagaTimeoutOutcome.Fail.ToString();
             saga.TimeoutDecisionReason = $"Evaluate error: {ex.Message}";
             saga.UpdatedAt = DateTimeOffset.UtcNow;

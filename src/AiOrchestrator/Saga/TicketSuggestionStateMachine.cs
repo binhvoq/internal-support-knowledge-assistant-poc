@@ -34,11 +34,12 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
     public Schedule<TicketSuggestionState, ISagaTimeoutExpired> StepTimeout { get; private set; } = null!;
     public Schedule<TicketSuggestionState, ISagaVerifyDue> VerifyDue { get; private set; } = null!;
 
+    internal readonly SagaTimeoutOptions TimeoutOptions;
+
     public TicketSuggestionStateMachine(IOptions<SagaTimeoutOptions> timeoutOptions)
     {
-        var opts = timeoutOptions.Value;
-        var stepTimeoutDelay = TimeSpan.FromSeconds(Math.Max(5, opts.TimeoutSeconds));
-        var verifyDelay = TimeSpan.FromSeconds(Math.Max(5, opts.VerifyRetrySeconds));
+        TimeoutOptions = timeoutOptions.Value;
+        var verifyDelay = TimeSpan.FromSeconds(Math.Max(5, TimeoutOptions.VerifyRetrySeconds));
 
         InstanceState(x => x.CurrentState);
 
@@ -69,7 +70,7 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
 
         Schedule(() => StepTimeout, x => x.TimeoutTokenId, s =>
         {
-            s.Delay = stepTimeoutDelay;
+            s.Delay = TimeSpan.FromSeconds(5);
             s.Received = r => r.CorrelateById(ctx => ctx.Message.CorrelationId);
         });
 
@@ -86,7 +87,7 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                     ctx.Saga.OriginalStatus = TicketStatus.New;
                     ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
                 })
-                .Schedule(StepTimeout, ctx => new SagaTimeoutExpired(ctx.Saga.CorrelationId, ctx.Saga.TicketId))
+                .ScheduleStepTimeout(this, TimeoutOptions.Analyzing.TimeoutSeconds)
                 .Send(ctx => new MarkTicketAnalyzing(
                     ctx.Saga.CorrelationId,
                     ctx.Saga.TicketId,
@@ -98,10 +99,12 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                 .Then(ctx =>
                 {
                     ctx.Saga.TicketSagaEpoch = ctx.Message.SagaEpoch;
+                    SagaTimeoutRecovery.ResetForNextStep(ctx.Saga);
                     ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
                 })
-                .Unschedule(StepTimeout)
-                .Schedule(StepTimeout, ctx => new SagaTimeoutExpired(ctx.Saga.CorrelationId, ctx.Saga.TicketId))
+                .UnscheduleAllStepTimeouts(this)
+                .Unschedule(VerifyDue)
+                .ScheduleStepTimeout(this, TimeoutOptions.RunningAi.TimeoutSeconds)
                 .Send(ctx => new RunAiPipeline(
                     ctx.Saga.CorrelationId,
                     ctx.Saga.TicketId,
@@ -115,20 +118,17 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                     ctx.Saga.FailureReason = ctx.Message.Reason;
                     ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
                 })
-                .Unschedule(StepTimeout)
+                .UnscheduleAllStepTimeouts(this)
+                .Unschedule(VerifyDue)
                 .TransitionTo(Failed),
 
             When(StepTimeout.Received)
-                .Then(ctx =>
-                {
-                    ctx.Saga.CompensationReason = "Timeout cho TicketService confirm MarkAnalyzing.";
-                    ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
-                })
-                .Send(ctx => new CompensateMarkAnalyzing(
-                    ctx.Saga.CorrelationId,
-                    ctx.Saga.TicketId,
-                    ctx.Saga.OriginalStatus))
-                .TransitionTo(Compensating));
+                .Activity(x => x.OfType<EvaluateAnalyzingTimeoutActivity>())
+                .ApplyAnalyzingTimeoutOutcomeBranches(this),
+
+            When(VerifyDue.Received)
+                .Activity(x => x.OfType<EvaluateAnalyzingTimeoutActivity>())
+                .ApplyAnalyzingTimeoutOutcomeBranches(this));
 
         During(RunningAi,
             When(AiPipelineCompleted)
@@ -137,10 +137,12 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                     ctx.Saga.Category = ctx.Message.Category;
                     ctx.Saga.Suggestion = ctx.Message.Suggestion;
                     ctx.Saga.RelatedDocumentsJson = JsonSerializer.Serialize(ctx.Message.RelatedDocuments);
+                    SagaTimeoutRecovery.ResetForNextStep(ctx.Saga);
                     ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
                 })
-                .Unschedule(StepTimeout)
-                .Schedule(StepTimeout, ctx => new SagaTimeoutExpired(ctx.Saga.CorrelationId, ctx.Saga.TicketId))
+                .UnscheduleAllStepTimeouts(this)
+                .Unschedule(VerifyDue)
+                .ScheduleStepTimeout(this, TimeoutOptions.Saving.TimeoutSeconds)
                 .Send(ctx => new SaveTicketSuggestion(
                     ctx.Saga.CorrelationId,
                     ctx.Saga.TicketId,
@@ -154,9 +156,12 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                 .Then(ctx =>
                 {
                     ctx.Saga.CompensationReason = ctx.Message.Reason;
+                    SagaTimeoutRecovery.ResetForCompensatingStep(ctx.Saga);
                     ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
                 })
-                .Unschedule(StepTimeout)
+                .UnscheduleAllStepTimeouts(this)
+                .Unschedule(VerifyDue)
+                .ScheduleStepTimeout(this, TimeoutOptions.Compensating.TimeoutSeconds)
                 .Send(ctx => new CompensateMarkAnalyzing(
                     ctx.Saga.CorrelationId,
                     ctx.Saga.TicketId,
@@ -164,21 +169,17 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                 .TransitionTo(Compensating),
 
             When(StepTimeout.Received)
-                .Then(ctx =>
-                {
-                    ctx.Saga.CompensationReason = "Timeout khi cho AI pipeline.";
-                    ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
-                })
-                .Send(ctx => new CompensateMarkAnalyzing(
-                    ctx.Saga.CorrelationId,
-                    ctx.Saga.TicketId,
-                    ctx.Saga.OriginalStatus))
-                .TransitionTo(Compensating));
+                .Activity(x => x.OfType<EvaluateRunningAiTimeoutActivity>())
+                .ApplyRunningAiTimeoutOutcomeBranches(this),
+
+            When(VerifyDue.Received)
+                .Activity(x => x.OfType<EvaluateRunningAiTimeoutActivity>())
+                .ApplyRunningAiTimeoutOutcomeBranches(this));
 
         During(Saving,
             When(SuggestionSaved)
                 .Then(ctx => ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow)
-                .Unschedule(StepTimeout)
+                .UnscheduleAllStepTimeouts(this)
                 .Unschedule(VerifyDue)
                 .PublishAsync(ctx => ctx.Init<IAiSuggestionGenerated>(
                     new AiSuggestionGenerated(ctx.Saga.CorrelationId, ctx.Saga.TicketId)))
@@ -188,9 +189,12 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                 .Then(ctx =>
                 {
                     ctx.Saga.CompensationReason = ctx.Message.Reason;
+                    SagaTimeoutRecovery.ResetForCompensatingStep(ctx.Saga);
                     ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
                 })
+                .UnscheduleAllStepTimeouts(this)
                 .Unschedule(VerifyDue)
+                .ScheduleStepTimeout(this, TimeoutOptions.Compensating.TimeoutSeconds)
                 .Send(ctx => new CompensateMarkAnalyzing(
                     ctx.Saga.CorrelationId,
                     ctx.Saga.TicketId,
@@ -208,17 +212,17 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
         During(Compensating,
             When(MarkAnalyzingReverted)
                 .Then(ctx => ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow)
-                .Unschedule(StepTimeout)
+                .UnscheduleAllStepTimeouts(this)
                 .Unschedule(VerifyDue)
                 .TransitionTo(Compensated),
 
             When(StepTimeout.Received)
-                .Then(ctx =>
-                {
-                    ctx.Saga.FailureReason = $"Compensation cung timeout: {ctx.Saga.CompensationReason}";
-                    ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
-                })
-                .TransitionTo(Failed));
+                .Activity(x => x.OfType<EvaluateCompensatingTimeoutActivity>())
+                .ApplyCompensatingTimeoutOutcomeBranches(this),
+
+            When(VerifyDue.Received)
+                .Activity(x => x.OfType<EvaluateCompensatingTimeoutActivity>())
+                .ApplyCompensatingTimeoutOutcomeBranches(this));
 
         DuringAny(
             Ignore(MarkAnalyzingReverted),
@@ -233,6 +237,188 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
     }
 }
 
+internal static class SagaTimeoutScheduleExtensions
+{
+    public static EventActivityBinder<TicketSuggestionState, TMessage> ScheduleStepTimeout<TMessage>(
+        this EventActivityBinder<TicketSuggestionState, TMessage> binder,
+        TicketSuggestionStateMachine machine,
+        int timeoutSeconds)
+        where TMessage : class =>
+        binder.Schedule(
+            machine.StepTimeout,
+            ctx => new SagaTimeoutExpired(ctx.Saga.CorrelationId, ctx.Saga.TicketId),
+            ctx => TimeSpan.FromSeconds(Math.Max(5, timeoutSeconds)));
+
+    public static EventActivityBinder<TicketSuggestionState, TMessage> UnscheduleAllStepTimeouts<TMessage>(
+        this EventActivityBinder<TicketSuggestionState, TMessage> binder,
+        TicketSuggestionStateMachine machine)
+        where TMessage : class =>
+        binder.Unschedule(machine.StepTimeout);
+}
+
+internal static class CompensatingTimeoutStateMachineExtensions
+{
+    public static EventActivityBinder<TicketSuggestionState, TMessage> ApplyCompensatingTimeoutOutcomeBranches<TMessage>(
+        this EventActivityBinder<TicketSuggestionState, TMessage> binder,
+        TicketSuggestionStateMachine machine)
+        where TMessage : class
+    {
+        return binder
+            .If(ctx => SagaTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.Complete), b => b
+                .UnscheduleAllStepTimeouts(machine)
+                .Unschedule(machine.VerifyDue)
+                .TransitionTo(machine.Compensated))
+
+            .If(ctx => SagaTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.RetryVerify), b => b
+                .Schedule(machine.VerifyDue, ctx => new SagaVerifyDue(ctx.Saga.CorrelationId, ctx.Saga.TicketId)))
+
+            .If(ctx => SagaTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.ResendCompensate), b => b
+                .Then(ctx =>
+                {
+                    ctx.Saga.CompensateResendCount++;
+                    ctx.Saga.CompensateResendIssuedAt = DateTimeOffset.UtcNow;
+                    ctx.Saga.PostResendVerifyAttempts = 0;
+                    ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
+                })
+                .Send(ctx => new CompensateMarkAnalyzing(
+                    ctx.Saga.CorrelationId,
+                    ctx.Saga.TicketId,
+                    ctx.Saga.OriginalStatus))
+                .Schedule(machine.VerifyDue, ctx => new SagaVerifyDue(ctx.Saga.CorrelationId, ctx.Saga.TicketId)))
+
+            .If(ctx => SagaTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.Fail), b => b
+                .Then(ctx =>
+                {
+                    ctx.Saga.FailureReason = ctx.Saga.TimeoutDecisionReason;
+                    ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
+                })
+                .UnscheduleAllStepTimeouts(machine)
+                .Unschedule(machine.VerifyDue)
+                .TransitionTo(machine.Failed));
+    }
+}
+
+internal static class AnalyzingTimeoutStateMachineExtensions
+{
+    public static EventActivityBinder<TicketSuggestionState, TMessage> ApplyAnalyzingTimeoutOutcomeBranches<TMessage>(
+        this EventActivityBinder<TicketSuggestionState, TMessage> binder,
+        TicketSuggestionStateMachine machine)
+        where TMessage : class
+    {
+        return binder
+            .If(ctx => SagaTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.Proceed), b => b
+                .Then(ctx =>
+                {
+                    SagaTimeoutRecovery.ResetForNextStep(ctx.Saga);
+                    ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
+                })
+                .UnscheduleAllStepTimeouts(machine)
+                .Unschedule(machine.VerifyDue)
+                .ScheduleStepTimeout(machine, machine.TimeoutOptions.RunningAi.TimeoutSeconds)
+                .Send(ctx => new RunAiPipeline(
+                    ctx.Saga.CorrelationId,
+                    ctx.Saga.TicketId,
+                    ctx.Saga.Question,
+                    ctx.Saga.Category ?? SupportCategory.Other))
+                .TransitionTo(machine.RunningAi))
+
+            .If(ctx => SagaTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.RetryVerify), b => b
+                .Schedule(machine.VerifyDue, ctx => new SagaVerifyDue(ctx.Saga.CorrelationId, ctx.Saga.TicketId)))
+
+            .If(ctx => SagaTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.ResendMark), b => b
+                .Then(ctx =>
+                {
+                    ctx.Saga.MarkResendIssued = true;
+                    ctx.Saga.MarkResendIssuedAt = DateTimeOffset.UtcNow;
+                    ctx.Saga.PostResendVerifyAttempts = 0;
+                    ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
+                })
+                .Send(ctx => new MarkTicketAnalyzing(
+                    ctx.Saga.CorrelationId,
+                    ctx.Saga.TicketId,
+                    ctx.Saga.TicketSagaEpoch))
+                .Schedule(machine.VerifyDue, ctx => new SagaVerifyDue(ctx.Saga.CorrelationId, ctx.Saga.TicketId)))
+
+            .If(ctx => SagaTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.Fail), b => b
+                .Then(ctx =>
+                {
+                    ctx.Saga.FailureReason = ctx.Saga.TimeoutDecisionReason;
+                    ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
+                })
+                .UnscheduleAllStepTimeouts(machine)
+                .Unschedule(machine.VerifyDue)
+                .TransitionTo(machine.Failed));
+    }
+}
+
+internal static class RunningAiTimeoutStateMachineExtensions
+{
+    public static EventActivityBinder<TicketSuggestionState, TMessage> ApplyRunningAiTimeoutOutcomeBranches<TMessage>(
+        this EventActivityBinder<TicketSuggestionState, TMessage> binder,
+        TicketSuggestionStateMachine machine)
+        where TMessage : class
+    {
+        return binder
+            .If(ctx => SagaTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.Proceed), b => b
+                .Then(ctx =>
+                {
+                    SagaTimeoutRecovery.ResetForNextStep(ctx.Saga);
+                    ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
+                })
+                .UnscheduleAllStepTimeouts(machine)
+                .Unschedule(machine.VerifyDue)
+                .ScheduleStepTimeout(machine, machine.TimeoutOptions.Saving.TimeoutSeconds)
+                .Send(ctx => new SaveTicketSuggestion(
+                    ctx.Saga.CorrelationId,
+                    ctx.Saga.TicketId,
+                    ctx.Saga.TicketSagaEpoch,
+                    ctx.Saga.Category!,
+                    ctx.Saga.Suggestion!,
+                    SagaSaveCommandFactory.DeserializeRelatedDocuments(ctx.Saga.RelatedDocumentsJson)))
+                .TransitionTo(machine.Saving))
+
+            .If(ctx => SagaTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.RetryVerify), b => b
+                .Schedule(machine.VerifyDue, ctx => new SagaVerifyDue(ctx.Saga.CorrelationId, ctx.Saga.TicketId)))
+
+            .If(ctx => SagaTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.ResendRun), b => b
+                .Then(ctx =>
+                {
+                    ctx.Saga.AiRunResendCount++;
+                    ctx.Saga.AiRunResendIssuedAt = DateTimeOffset.UtcNow;
+                    ctx.Saga.PostResendVerifyAttempts = 0;
+                    ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
+                })
+                .Send(ctx => SagaRunCommandFactory.Create(ctx.Saga))
+                .Schedule(machine.VerifyDue, ctx => new SagaVerifyDue(ctx.Saga.CorrelationId, ctx.Saga.TicketId)))
+
+            .If(ctx => SagaTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.Compensate), b => b
+                .Then(ctx =>
+                {
+                    ctx.Saga.CompensationReason = ctx.Saga.TimeoutDecisionReason;
+                    ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
+                })
+                .Then(ctx => SagaTimeoutRecovery.ResetForCompensatingStep(ctx.Saga))
+                .UnscheduleAllStepTimeouts(machine)
+                .Unschedule(machine.VerifyDue)
+                .ScheduleStepTimeout(machine, machine.TimeoutOptions.Compensating.TimeoutSeconds)
+                .Send(ctx => new CompensateMarkAnalyzing(
+                    ctx.Saga.CorrelationId,
+                    ctx.Saga.TicketId,
+                    ctx.Saga.OriginalStatus))
+                .TransitionTo(machine.Compensating))
+
+            .If(ctx => SagaTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.Fail), b => b
+                .Then(ctx =>
+                {
+                    ctx.Saga.FailureReason = ctx.Saga.TimeoutDecisionReason;
+                    ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
+                })
+                .UnscheduleAllStepTimeouts(machine)
+                .Unschedule(machine.VerifyDue)
+                .TransitionTo(machine.Failed));
+    }
+}
+
 internal static class SavingTimeoutStateMachineExtensions
 {
     public static EventActivityBinder<TicketSuggestionState, TMessage> ApplySavingTimeoutOutcomeBranches<TMessage>(
@@ -241,47 +427,50 @@ internal static class SavingTimeoutStateMachineExtensions
         where TMessage : class
     {
         return binder
-            .If(ctx => SavingTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.Complete), b => b
-                .Unschedule(machine.StepTimeout)
+            .If(ctx => SagaTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.Complete), b => b
+                .UnscheduleAllStepTimeouts(machine)
                 .Unschedule(machine.VerifyDue)
                 .PublishAsync(ctx => ctx.Init<IAiSuggestionGenerated>(
                     new AiSuggestionGenerated(ctx.Saga.CorrelationId, ctx.Saga.TicketId)))
                 .TransitionTo(machine.Completed))
 
-            .If(ctx => SavingTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.RetryVerify), b => b
+            .If(ctx => SagaTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.RetryVerify), b => b
                 .Schedule(machine.VerifyDue, ctx => new SagaVerifyDue(ctx.Saga.CorrelationId, ctx.Saga.TicketId)))
 
-            .If(ctx => SavingTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.ResendSave), b => b
+            .If(ctx => SagaTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.ResendSave), b => b
                 .Then(ctx =>
                 {
                     ctx.Saga.SaveResendIssued = true;
                     ctx.Saga.SaveResendIssuedAt = DateTimeOffset.UtcNow;
+                    ctx.Saga.PostResendVerifyAttempts = 0;
                     ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
                 })
                 .Send(ctx => SagaSaveCommandFactory.Create(ctx.Saga))
                 .Schedule(machine.VerifyDue, ctx => new SagaVerifyDue(ctx.Saga.CorrelationId, ctx.Saga.TicketId)))
 
-            .If(ctx => SavingTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.Compensate), b => b
+            .If(ctx => SagaTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.Compensate), b => b
                 .Then(ctx =>
                 {
                     ctx.Saga.CompensationReason = ctx.Saga.TimeoutDecisionReason;
                     ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
                 })
-                .Unschedule(machine.StepTimeout)
+                .Then(ctx => SagaTimeoutRecovery.ResetForCompensatingStep(ctx.Saga))
+                .UnscheduleAllStepTimeouts(machine)
                 .Unschedule(machine.VerifyDue)
+                .ScheduleStepTimeout(machine, machine.TimeoutOptions.Compensating.TimeoutSeconds)
                 .Send(ctx => new CompensateMarkAnalyzing(
                     ctx.Saga.CorrelationId,
                     ctx.Saga.TicketId,
                     ctx.Saga.OriginalStatus))
                 .TransitionTo(machine.Compensating))
 
-            .If(ctx => SavingTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.Fail), b => b
+            .If(ctx => SagaTimeoutOutcomeHelper.Is(ctx, SagaTimeoutOutcome.Fail), b => b
                 .Then(ctx =>
                 {
                     ctx.Saga.FailureReason = ctx.Saga.TimeoutDecisionReason;
                     ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
                 })
-                .Unschedule(machine.StepTimeout)
+                .UnscheduleAllStepTimeouts(machine)
                 .Unschedule(machine.VerifyDue)
                 .TransitionTo(machine.Failed));
     }

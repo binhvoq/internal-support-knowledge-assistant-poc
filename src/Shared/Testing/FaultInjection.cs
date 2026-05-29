@@ -23,6 +23,10 @@ public static class FaultInjection
     // Dung de verify Saving-timeout suspect path: orchestrator phai probe source-of-truth, khong compensate mu.
     public const string ForceSkipSaveSuggestionEvent = "__SKIP_SAVE_EVENT__";
 
+    // CompensateMarkAnalyzingConsumer revert DB nhung KHONG publish MarkAnalyzingReverted.
+    // Dung de verify Compensating-timeout probe -> Compensated (tranh Failed gia).
+    public const string ForceSkipCompensateRevertedEvent = "__SKIP_COMPENSATE_EVENT__";
+
     public static bool Has(this string? text, string marker)
         => !string.IsNullOrEmpty(text) && text.Contains(marker, StringComparison.OrdinalIgnoreCase);
 }

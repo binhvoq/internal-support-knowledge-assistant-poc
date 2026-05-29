@@ -4,9 +4,14 @@ using SupportPoc.AiOrchestrator.Saga.Timeouts.Probes;
 
 namespace SupportPoc.AiOrchestrator.Saga.Timeouts;
 
-public sealed class SavingTimeoutEvaluator(
+public interface ICompensatingTimeoutEvaluator
+{
+    Task<SagaTimeoutDecision> EvaluateAsync(StepTimeoutContext context, CancellationToken cancellationToken);
+}
+
+public sealed class CompensatingTimeoutEvaluator(
     ITicketProgressProbe probe,
-    SavingTimeoutPolicy policy) : ISavingTimeoutEvaluator
+    CompensatingTimeoutPolicy policy) : ICompensatingTimeoutEvaluator
 {
     public async Task<SagaTimeoutDecision> EvaluateAsync(StepTimeoutContext context, CancellationToken cancellationToken)
     {

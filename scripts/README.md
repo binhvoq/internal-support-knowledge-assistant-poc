@@ -10,6 +10,7 @@ PoC nay la **Internal Support Knowledge Assistant**: employee tao support ticket
 |------|----------|
 | [`../docs/technical_learn.md`](../docs/technical_learn.md) | Checklist cong nghe can luyen. Chi doc, khong tu y sua neu owner khong yeu cau. |
 | [`../docs/mini_business_poc.md`](../docs/mini_business_poc.md) | Mo ta nghiep vu mini va cach gan Microservices, Event-Driven, RAG, Saga, Idempotency, Inbox, Outbox vao flow. |
+| [`../docs/saga-orchestration-timeout-recovery.md`](../docs/saga-orchestration-timeout-recovery.md) | Saga timeout recovery, fault injection, unit test va debug. |
 | [`../docs/user_stories.md`](../docs/user_stories.md) | User stories va acceptance criteria de implement/kiem tra PoC. |
 | [`../SupportPoc.slnx`](../SupportPoc.slnx) | Solution .NET backend. |
 | [`../frontend`](../frontend) | React UI. |
@@ -19,7 +20,7 @@ PoC nay la **Internal Support Knowledge Assistant**: employee tao support ticket
 
 - Khong tao them script moi neu script hien co da lam duoc viec. Sua script hien co va cap nhat README nay.
 - Khong ghi secret vao git. `config/azure.local.json` va `src/*/appsettings.Development.json` la local generated config.
-- Sau thay doi co anh huong runtime, chay `bash scripts/restart-services.sh` va `bash scripts/smoke-test.sh`.
+- Sau thay doi saga/timeout/compensation: doc [`../docs/saga-orchestration-timeout-recovery.md`](../docs/saga-orchestration-timeout-recovery.md), chay `dotnet test`, `bash scripts/restart-services.sh`, `bash scripts/smoke-test.sh`.
 - Azure Search Basic va Service Bus Standard ton phi co dinh. Dung `bash scripts/azure-resources-stop.sh` khi khong can chay nua.
 - `docs/technical_learn.md` la input checklist cua owner; tranh sua file nay neu task khong noi ro.
 - Terraform trong [`../infra/terraform`](../infra/terraform) la huong dai han de start/stop Azure resources. Scripts van duoc giu trong luc Terraform on dinh.
@@ -35,6 +36,8 @@ PoC nay la **Internal Support Knowledge Assistant**: employee tao support ticket
 | [`azure-resources-start.sh`](azure-resources-start.sh) | Bat lai resources: refresh neu RG con ton tai, provision neu RG da bi xoa. | Khi muon chay lai PoC sau khi stop. |
 | [`restart-services.sh`](restart-services.sh) | Build va restart 4 backend local tren ports 5001-5004. | Sau khi sync config hoac sua backend. |
 | [`smoke-test.sh`](smoke-test.sh) | Chay flow dev end-to-end: health, MCP tools, re-index, tao ticket, AI suggestion, chat, resolve. | De xac nhan PoC dang work. |
+
+Saga timeout / fault injection / unit test: xem [`../docs/saga-orchestration-timeout-recovery.md`](../docs/saga-orchestration-timeout-recovery.md).
 
 Hien khong co script nao du thua. Cac script co quan he nhu sau:
 

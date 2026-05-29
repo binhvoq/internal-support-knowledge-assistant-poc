@@ -45,6 +45,7 @@ public sealed class SaveTicketSuggestionConsumer : IConsumer<ISaveTicketSuggesti
         if (ticket.Status == TicketStatus.Suggested && !string.IsNullOrWhiteSpace(ticket.AiSuggestedAnswer))
         {
             _logger.LogInformation("Ticket {TicketId} da co Suggestion - bo qua save lap.", msg.TicketId);
+            ticket.ActiveSagaCorrelationId = null;
             await context.Publish<ITicketSuggestionSaved>(new TicketSuggestionSaved(msg.CorrelationId, msg.TicketId));
             await _db.SaveChangesAsync(context.CancellationToken);
             return;
@@ -54,6 +55,7 @@ public sealed class SaveTicketSuggestionConsumer : IConsumer<ISaveTicketSuggesti
         ticket.Category = msg.Category;
         ticket.AiSuggestedAnswer = msg.Suggestion;
         ticket.RelatedDocumentsJson = JsonSerializer.Serialize(msg.RelatedDocuments, JsonOptions);
+        ticket.ActiveSagaCorrelationId = null;
         ticket.UpdatedAt = DateTimeOffset.UtcNow;
 
         // Fault injection: save da commit nhung event ack bi "mat/tre" (skip publish) de test recovery cua Saving timeout.

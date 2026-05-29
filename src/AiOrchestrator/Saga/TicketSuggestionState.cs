@@ -41,15 +41,18 @@ public sealed class TicketSuggestionState : SagaStateMachineInstance, ISagaVersi
     public string? TimeoutDecisionReason { get; set; }
     public int TimeoutVerifyAttempts { get; set; }
     public int PostResendVerifyAttempts { get; set; }
+    public bool MarkResendIssued { get; set; }
+    public DateTimeOffset? MarkResendIssuedAt { get; set; }
     public bool SaveResendIssued { get; set; }
     public DateTimeOffset? SaveResendIssuedAt { get; set; }
+    public int AiRunResendCount { get; set; }
+    public DateTimeOffset? AiRunResendIssuedAt { get; set; }
+    public int CompensateResendCount { get; set; }
+    public DateTimeOffset? CompensateResendIssuedAt { get; set; }
 
     public string? FailureReason { get; set; }
     public string? CompensationReason { get; set; }
 
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
-
-    // TECHNICAL DEBT (phase 1): TicketService khong clear ActiveSagaCorrelationId sau save complete.
-    // Probe/policy Complete van check ownership + epoch. Phase 2: FinalizeTicketSuggestionSaga hoac clear tren save.
 }

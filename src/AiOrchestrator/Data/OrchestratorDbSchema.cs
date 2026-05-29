@@ -32,8 +32,14 @@ internal static class OrchestratorDbSchema
         await AddColumnIfMissingAsync(db, columns, "TimeoutDecisionReason", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(db, columns, "TimeoutVerifyAttempts", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
         await AddColumnIfMissingAsync(db, columns, "PostResendVerifyAttempts", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
+        await AddColumnIfMissingAsync(db, columns, "MarkResendIssued", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
+        await AddColumnIfMissingAsync(db, columns, "MarkResendIssuedAt", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(db, columns, "SaveResendIssued", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
         await AddColumnIfMissingAsync(db, columns, "SaveResendIssuedAt", "TEXT NULL", cancellationToken);
+        await AddColumnIfMissingAsync(db, columns, "AiRunResendCount", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
+        await AddColumnIfMissingAsync(db, columns, "AiRunResendIssuedAt", "TEXT NULL", cancellationToken);
+        await AddColumnIfMissingAsync(db, columns, "CompensateResendCount", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
+        await AddColumnIfMissingAsync(db, columns, "CompensateResendIssuedAt", "TEXT NULL", cancellationToken);
     }
 
     private static async Task AddColumnIfMissingAsync(

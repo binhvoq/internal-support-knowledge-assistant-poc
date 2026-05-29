@@ -48,6 +48,15 @@ builder.Services.AddHttpClient<ITicketProgressProbe, HttpTicketProgressProbe>();
 builder.Services.AddScoped<SavingTimeoutPolicy>();
 builder.Services.AddScoped<ISavingTimeoutEvaluator, SavingTimeoutEvaluator>();
 builder.Services.AddScoped<EvaluateSavingTimeoutActivity>();
+builder.Services.AddScoped<AnalyzingTimeoutPolicy>();
+builder.Services.AddScoped<IAnalyzingTimeoutEvaluator, AnalyzingTimeoutEvaluator>();
+builder.Services.AddScoped<EvaluateAnalyzingTimeoutActivity>();
+builder.Services.AddScoped<RunningAiTimeoutPolicy>();
+builder.Services.AddScoped<IRunningAiTimeoutEvaluator, RunningAiTimeoutEvaluator>();
+builder.Services.AddScoped<EvaluateRunningAiTimeoutActivity>();
+builder.Services.AddScoped<CompensatingTimeoutPolicy>();
+builder.Services.AddScoped<ICompensatingTimeoutEvaluator, CompensatingTimeoutEvaluator>();
+builder.Services.AddScoped<EvaluateCompensatingTimeoutActivity>();
 
 // ---------- MassTransit ----------
 var serviceBus = builder.Configuration.GetSection(ServiceBusOptions.SectionName).Get<ServiceBusOptions>() ?? new ServiceBusOptions();

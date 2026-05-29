@@ -15,4 +15,8 @@
   <Folder Name="/src/TicketService/">
     <Project Path="src/TicketService/SupportPoc.TicketService.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SupportPoc.AiOrchestrator.Tests/SupportPoc.AiOrchestrator.Tests.csproj" />
+    <Project Path="tests/SupportPoc.TicketService.Tests/SupportPoc.TicketService.Tests.csproj" />
+  </Folder>
 </Solution>
