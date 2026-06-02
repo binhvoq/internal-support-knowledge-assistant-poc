@@ -1,0 +1,39 @@
+// App Insights — MCP tool invocation audit (Phase 6)
+// Chạy trong Azure Portal > Application Insights > Logs (workspace-linked)
+
+// 1) Tổng quan allowed vs denied theo thời gian
+customEvents
+| where name == "McpToolInvocation"
+| extend outcome = tostring(customDimensions.outcome)
+| extend tool = tostring(customDimensions.tool)
+| extend oid = tostring(customDimensions.oid)
+| extend roles = tostring(customDimensions.roles)
+| extend correlationId = tostring(customDimensions.correlationId)
+| summarize count() by bin(timestamp, 1h), outcome
+| render timechart
+
+// 2) Tool bị chặn (denied) — cần điều tra
+customEvents
+| where name == "McpToolInvocation"
+| where tostring(customDimensions.outcome) == "denied"
+| project timestamp,
+    tool = tostring(customDimensions.tool),
+    oid = tostring(customDimensions.oid),
+    roles = tostring(customDimensions.roles),
+    correlationId = tostring(customDimensions.correlationId)
+| order by timestamp desc
+
+// 3) Top tool theo user (oid)
+customEvents
+| where name == "McpToolInvocation"
+| where tostring(customDimensions.outcome) == "allowed"
+| summarize invocations = count() by
+    oid = tostring(customDimensions.oid),
+    tool = tostring(customDimensions.tool)
+| order by invocations desc
+
+// 4) Alert gợi ý (tạo Scheduled query rule trong Portal):
+//    customEvents | where name == "McpToolInvocation"
+//    | where customDimensions.outcome == "denied"
+//    | summarize denied = count() by bin(timestamp, 5m)
+//    | where denied > 0

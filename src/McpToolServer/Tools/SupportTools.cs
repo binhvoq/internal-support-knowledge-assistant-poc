@@ -2,24 +2,21 @@ using System.ComponentModel;
 using System.Net.Http.Json;
 using System.Text.Json;
 using ModelContextProtocol.Server;
+using SupportPoc.Shared.Auth;
 
 namespace SupportPoc.McpToolServer.Tools;
 
 [McpServerToolType]
-public sealed class SupportTools(IHttpClientFactory httpClientFactory, IConfiguration configuration)
+public sealed class SupportTools(IHttpClientFactory httpClientFactory)
 {
-    private HttpClient TicketClient => CreateClient("Services:TicketService", "http://localhost:5001");
-    private HttpClient KnowledgeClient => CreateClient("Services:KnowledgeService", "http://localhost:5002");
+    private HttpClient TicketClient => httpClientFactory.CreateClient("ticket-api");
+    private HttpClient KnowledgeClient => httpClientFactory.CreateClient("knowledge-api");
 
-    private HttpClient CreateClient(string configKey, string fallback)
-    {
-        var client = httpClientFactory.CreateClient();
-        var baseUrl = configuration[configKey] ?? fallback;
-        client.BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/");
-        return client;
-    }
-
-    [McpServerTool]
+    [McpServerTool(Name = "create_ticket", Destructive = false, Idempotent = false, OpenWorld = false)]
+    [SupportToolPolicy(
+        SupportToolRisks.Medium,
+        AppRoleNames.Agent,
+        Notes = "Creates a ticket through TicketService. Employee self-service should use direct API/UI flow, not this privileged MCP tool.")]
     [Description("Tao ticket ho tro moi.")]
     public async Task<string> CreateTicket(
         [Description("Ma nhan vien")] string employeeId,
@@ -39,7 +36,11 @@ public sealed class SupportTools(IHttpClientFactory httpClientFactory, IConfigur
         return await response.Content.ReadAsStringAsync(cancellationToken);
     }
 
-    [McpServerTool]
+    [McpServerTool(Name = "get_ticket", ReadOnly = true, OpenWorld = false)]
+    [SupportToolPolicy(
+        SupportToolRisks.Medium,
+        AppRoleNames.Agent,
+        Notes = "Privileged ticket lookup. Employee-scoped reads need a separate get_my_ticket/user-context design.")]
     [Description("Lay chi tiet ticket ho tro theo ticketId.")]
     public async Task<string> GetTicket(
         [Description("Ma ticket, vi du TCK-001")] string ticketId,
@@ -47,11 +48,26 @@ public sealed class SupportTools(IHttpClientFactory httpClientFactory, IConfigur
     {
         var response = await TicketClient.GetAsync($"/tickets/{ticketId}", cancellationToken);
         if (!response.IsSuccessStatusCode)
-            return JsonSerializer.Serialize(new { error = $"Ticket {ticketId} khong ton tai." });
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            return JsonSerializer.Serialize(new
+            {
+                error = response.StatusCode switch
+                {
+                    System.Net.HttpStatusCode.NotFound => $"Ticket {ticketId} khong ton tai.",
+                    System.Net.HttpStatusCode.Unauthorized => "Ticket API tu choi — thieu Bearer (client credentials).",
+                    _ => $"Ticket API {(int)response.StatusCode}: {(body.Length > 0 ? body : "loi khong ro")}",
+                },
+            });
+        }
         return await response.Content.ReadAsStringAsync(cancellationToken);
     }
 
-    [McpServerTool]
+    [McpServerTool(Name = "update_ticket_status", Destructive = true, Idempotent = false, OpenWorld = false)]
+    [SupportToolPolicy(
+        SupportToolRisks.High,
+        AppRoleNames.Agent,
+        Notes = "Mutates ticket state. TicketService still owns resource-level authorization and state transition rules.")]
     [Description("Cap nhat trang thai ticket.")]
     public async Task<string> UpdateTicketStatus(
         [Description("Ma ticket")] string ticketId,
@@ -80,7 +96,13 @@ public sealed class SupportTools(IHttpClientFactory httpClientFactory, IConfigur
         return await response.Content.ReadAsStringAsync(cancellationToken);
     }
 
-    [McpServerTool]
+    [McpServerTool(Name = "search_knowledge", ReadOnly = true, OpenWorld = false)]
+    [SupportToolPolicy(
+        SupportToolRisks.Low,
+        AppRoleNames.Employee,
+        AppRoleNames.Agent,
+        AppRoleNames.KnowledgeAdmin,
+        Notes = "Read-only knowledge search. Data authorization remains in KnowledgeService.")]
     [Description("Tim tai lieu noi bo theo query.")]
     public async Task<string> SearchKnowledge(
         [Description("Cau hoi tim kiem")] string query,
@@ -95,7 +117,13 @@ public sealed class SupportTools(IHttpClientFactory httpClientFactory, IConfigur
         return await response.Content.ReadAsStringAsync(cancellationToken);
     }
 
-    [McpServerTool]
+    [McpServerTool(Name = "list_support_categories", ReadOnly = true, OpenWorld = false)]
+    [SupportToolPolicy(
+        SupportToolRisks.Low,
+        AppRoleNames.Employee,
+        AppRoleNames.Agent,
+        AppRoleNames.KnowledgeAdmin,
+        Notes = "Read-only category lookup.")]
     [Description("Danh sach category ho tro.")]
     public async Task<string> ListSupportCategories(CancellationToken cancellationToken = default)
     {

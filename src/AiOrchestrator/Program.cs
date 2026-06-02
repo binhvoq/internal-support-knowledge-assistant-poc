@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Azure.Messaging.ServiceBus.Administration;
 using MassTransit;
 using Microsoft.EntityFrameworkCore;
@@ -13,10 +14,24 @@ using SupportPoc.AiOrchestrator.Saga.Timeouts.Activities;
 using SupportPoc.AiOrchestrator.Saga.Timeouts.Policies;
 using SupportPoc.AiOrchestrator.Saga.Timeouts.Probes;
 using SupportPoc.AiOrchestrator.Services;
+using SupportPoc.Shared.Auth;
 using SupportPoc.Shared.Contracts;
 using SupportPoc.Shared.Messaging;
+using SupportPoc.Shared.Telemetry;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddSupportPocApplicationInsights(builder.Configuration);
+
+var entraEnabled = builder.Configuration.IsEntraEnabled();
+if (entraEnabled)
+{
+    builder.Services.AddSupportPocEntraAuth(builder.Configuration);
+    builder.Services.AddSupportPocClientCredentials(builder.Configuration);
+}
+
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddSingleton<IFunctionInvocationFilter, McpRoleInvocationFilter>();
 
 builder.Services.Configure<ServiceBusOptions>(builder.Configuration.GetSection(ServiceBusOptions.SectionName));
 builder.Services.Configure<AzureOpenAIOptions>(builder.Configuration.GetSection(AzureOpenAIOptions.SectionName));
@@ -38,13 +53,19 @@ else
     builder.Services.AddKernel();
 }
 
+var mcpClientRegistration = builder.Services.AddHttpClient(McpToolGateway.HttpClientName);
+if (entraEnabled)
+    mcpClientRegistration.AddHttpMessageHandler<EntraBearerTokenHandler>();
 builder.Services.AddSingleton<McpToolGateway>();
 builder.Services.AddSingleton<McpDynamicPluginLoader>();
+builder.Services.AddSingleton<McpToolAccessService>();
 builder.Services.AddScoped<AiPipelineService>();
 builder.Services.AddScoped<IChatCompletionServiceAccessor>();
 builder.Services.AddScoped<TicketSuggestionService>();
 
-builder.Services.AddHttpClient<ITicketProgressProbe, HttpTicketProgressProbe>();
+var probeRegistration = builder.Services.AddHttpClient<ITicketProgressProbe, HttpTicketProgressProbe>();
+if (entraEnabled)
+    probeRegistration.AddHttpMessageHandler<EntraBearerTokenHandler>();
 builder.Services.AddScoped<SavingTimeoutPolicy>();
 builder.Services.AddScoped<ISavingTimeoutEvaluator, SavingTimeoutEvaluator>();
 builder.Services.AddScoped<EvaluateSavingTimeoutActivity>();
@@ -130,6 +151,8 @@ builder.Services.AddCors(options =>
 var app = builder.Build();
 
 app.UseCors();
+if (entraEnabled)
+    app.UseSupportPocEntraAuth();
 
 using (var scope = app.Services.CreateScope())
 {
@@ -138,7 +161,8 @@ using (var scope = app.Services.CreateScope())
     await OrchestratorDbSchema.EnsureSagaStateColumnsAsync(db);
 }
 
-app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "ai-orchestrator" }));
+app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "ai-orchestrator" }))
+    .AllowAnonymous();
 
 app.MapGet("/mcp/tools", async (McpDynamicPluginLoader loader, CancellationToken ct) =>
 {
@@ -148,7 +172,14 @@ app.MapGet("/mcp/tools", async (McpDynamicPluginLoader loader, CancellationToken
         count = catalog.Tools.Count,
         tools = catalog.Tools.Select(t => new { name = t.Name, description = t.Description })
     });
-});
+}).WithEntraPolicy(entraEnabled, PolicyNames.AgentOrService);
+
+app.MapGet("/mcp/allowed-tools", async (McpToolAccessService access, HttpContext httpContext, CancellationToken ct) =>
+{
+    var roles = httpContext.User.FindAll(ClaimTypes.Role).Select(c => c.Value);
+    var allowed = await access.GetAllowedToolNamesAsync(roles, ct);
+    return Results.Ok(new { count = allowed.Count, tools = allowed.OrderBy(tool => tool, StringComparer.OrdinalIgnoreCase) });
+}).WithEntraPolicy(entraEnabled, PolicyNames.EmployeeOrAbove);
 
 // /debug/dlq doc dead-letter queue cua mot endpoint Azure Service Bus.
 // Tra ve count cho queue chinh VA queue phu _error (MassTransit default faulted transport).
@@ -202,7 +233,7 @@ app.MapGet("/debug/dlq", async (string? queue, IOptions<ServiceBusOptions> sbOpt
     {
         return Results.Ok(new { error = ex.Message, queue = queueName });
     }
-});
+}).AllowAnonymous();
 
 // /debug/saga query MassTransit-managed TicketSuggestionStates thay vi SagaLogEntries cu.
 app.MapGet("/debug/saga", async (string? ticketId, OrchestratorDbContext db) =>
@@ -231,7 +262,7 @@ app.MapGet("/debug/saga", async (string? ticketId, OrchestratorDbContext db) =>
         })
         .ToList();
     return Results.Ok(items);
-});
+}).AllowAnonymous();
 
 app.MapPost("/ai/suggest-answer", async (SuggestAnswerRequest request, TicketSuggestionService service, CancellationToken ct) =>
 {
@@ -239,15 +270,19 @@ app.MapPost("/ai/suggest-answer", async (SuggestAnswerRequest request, TicketSug
         return Results.BadRequest(new { error = "question la bat buoc." });
     var answer = await service.SuggestAnswerAsync(request.Question, request.Category, ct);
     return Results.Ok(new { suggestedAnswer = answer });
-});
+}).WithEntraPolicy(entraEnabled, PolicyNames.AgentOrService);
 
-app.MapPost("/ai/chat", async (ChatRequest request, TicketSuggestionService service, CancellationToken ct) =>
+app.MapPost("/ai/chat", async (ChatRequest request, TicketSuggestionService service, HttpContext httpContext, CancellationToken ct) =>
 {
     if (string.IsNullOrWhiteSpace(request.Message))
         return Results.BadRequest(new { error = "message la bat buoc." });
-    var reply = await service.ChatAsync(request.Message, ct);
+
+    IEnumerable<string>? roles = entraEnabled
+        ? httpContext.User.FindAll(ClaimTypes.Role).Select(c => c.Value).ToArray()
+        : null;
+    var reply = await service.ChatAsync(request.Message, roles, ct);
     return Results.Ok(new { reply });
-});
+}).WithEntraPolicy(entraEnabled, PolicyNames.EmployeeOrAbove);
 
 app.MapPost("/ai/classify-ticket", async (ClassifyRequest request, TicketSuggestionService service, CancellationToken ct) =>
 {
@@ -255,7 +290,7 @@ app.MapPost("/ai/classify-ticket", async (ClassifyRequest request, TicketSuggest
         return Results.BadRequest(new { error = "question la bat buoc." });
     var result = await service.ClassifyTicketAsync(request.Question, ct);
     return result is null ? Results.Problem("Khong phan loai duoc.") : Results.Ok(result);
-});
+}).WithEntraPolicy(entraEnabled, PolicyNames.Service);
 
 app.Run();
 

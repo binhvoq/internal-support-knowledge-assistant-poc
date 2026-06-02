@@ -25,11 +25,18 @@ public sealed class McpToolCatalog
         return toolName;
     }
 
-    public string DescribeForPrompt()
+    public string DescribeForPrompt(IEnumerable<string>? allowedToolNames = null)
     {
-        if (Tools.Count == 0)
+        var tools = Tools;
+        if (allowedToolNames is not null)
+        {
+            var allowed = allowedToolNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            tools = Tools.Where(t => allowed.Contains(t.Name)).ToList();
+        }
+
+        if (tools.Count == 0)
             return "Khong co MCP tool nao.";
 
-        return string.Join("\n", Tools.Select(t => $"- {t.Name}: {t.Description ?? "(khong co mo ta)"}"));
+        return string.Join("\n", tools.Select(t => $"- {t.Name}: {t.Description ?? "(khong co mo ta)"}"));
     }
 }
