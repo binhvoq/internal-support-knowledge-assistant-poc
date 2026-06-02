@@ -87,7 +87,7 @@ export const api = {
     }),
   reopenTicket: (id: string) =>
     request<Ticket>(`${ticketBase}/tickets/${id}/reopen`, { method: 'POST' }),
-  patchTicket: (id: string, body: Record<string, unknown>) =>
+  patchTicket: (id: string, body: { status: string; finalAnswer?: string }) =>
     request<Ticket>(`${ticketBase}/tickets/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   listDocuments: () => request<KnowledgeDocument[]>(`${knowledgeBase}/documents`),
   createDocument: (body: { title: string; category: string; content: string; sourceUrl?: string }) =>

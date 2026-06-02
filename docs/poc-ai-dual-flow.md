@@ -197,13 +197,15 @@ Caller truyền `McpCallContext` (`source`, `sagaCorrelationId`, `ticketId`); ch
 | Ưu tiên | Hạng mục | Lý do |
 |---------|----------|--------|
 | **P0** | Lifecycle guard + MCP audit + `PATCH` + `TicketLifecycleMutation` | **Done** |
-| **P1** | Đổi label UI + script demo 3 case | Tiếp theo |
+| **P1** | Đổi label UI + script demo 3 case | **Done** — xem `scripts/demo-dual-ai-flow.md` |
 | **P2** | Sửa doc bỏ `NeedsManualReview` hoặc implement status | Doc ↔ code |
 | **Backlog** | Policy HR / category + sensitivity | Production thinking, không chặn PoC |
 
 ---
 
 ## 7. Kịch bản demo (P1)
+
+Script từng bước: [`scripts/demo-dual-ai-flow.md`](../scripts/demo-dual-ai-flow.md).
 
 ### Case 1 — Auto suggestion + Copilot sâu hơn
 

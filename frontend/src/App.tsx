@@ -31,7 +31,7 @@ function App() {
             ['employee', 'Employee'],
             ['queue', 'Support Queue'],
             ['knowledge', 'Knowledge Admin'],
-            ['chat', 'AI Chat'],
+            ['chat', 'Support Copilot'],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -162,7 +162,7 @@ function EmployeeView() {
       </div>
       {created && (
         <div className="success">
-          Da tao {created.id} — status: {created.status}. AI se xu ly trong giay lat.
+          Da tao {created.id} — status: {created.status}. Auto suggestion se duoc tao trong giay lat.
         </div>
       )}
       {myTickets.length > 0 && (
@@ -243,7 +243,7 @@ function QueueView({ onSelect }: { onSelect: (id: string) => void }) {
               <th>Category</th>
               <th>Status</th>
               <th>Question</th>
-              <th>AI</th>
+              <th>Auto</th>
               <th>Created</th>
             </tr>
           </thead>
@@ -270,7 +270,7 @@ function QueueView({ onSelect }: { onSelect: (id: string) => void }) {
                 <td>{t.question.slice(0, 60)}</td>
                 <td>
                   {t.aiSuggestedAnswer ? (
-                    <span className="badge ai">AI Ready</span>
+                    <span className="badge ai">Auto ready</span>
                   ) : (
                     <span className="badge new">Pending</span>
                   )}
@@ -345,7 +345,7 @@ function DetailView({ ticketId, onBack }: { ticketId: string; onBack: () => void
 
   const saveAnswer = async () => {
     const answer = finalAnswerRef.current?.value ?? finalAnswer;
-    const updated = await api.patchTicket(ticketId, { finalAnswer: answer });
+    const updated = await api.patchTicket(ticketId, { status: ticket.status, finalAnswer: answer });
     setTicket(updated);
     setFinalAnswer(updated.finalAnswer ?? answer);
     finalAnswerDirtyRef.current = false;
@@ -370,9 +370,9 @@ function DetailView({ ticketId, onBack }: { ticketId: string; onBack: () => void
       <p>
         <strong>Question:</strong> {ticket.question}
       </p>
-      <h3>AI Suggested Answer</h3>
+      <h3>Auto suggestion (gợi ý sơ bộ)</h3>
       {!ticket.aiSuggestedAnswer ? (
-        <p>{ticket.status === 'Analyzing' ? 'Dang phan tich...' : 'Chua co goi y.'}</p>
+        <p>{ticket.status === 'Analyzing' ? 'Dang tao goi y tu dong...' : 'Chua co goi y so bo.'}</p>
       ) : (
         <p>{ticket.aiSuggestedAnswer}</p>
       )}
@@ -563,8 +563,8 @@ function ChatView() {
 
   return (
     <div className="card">
-      <h2>AI Chat (Function Calling)</h2>
-      <AuthRequiredBanner action="dung AI Chat" />
+      <h2>Support Copilot</h2>
+      <AuthRequiredBanner action="dung Support Copilot" />
       <p>
         Thu hoi: tao ticket, hoi trang thai ticket, tim tai lieu noi bo, hoac resolve ticket qua lenh tu
         nhien.
