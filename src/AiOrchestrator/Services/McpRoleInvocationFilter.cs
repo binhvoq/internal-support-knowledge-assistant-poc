@@ -1,5 +1,6 @@
 using Microsoft.ApplicationInsights;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.SemanticKernel;
 using SupportPoc.AiOrchestrator.Mcp;
 
@@ -16,10 +17,10 @@ public sealed class McpRoleInvocationFilter : IFunctionInvocationFilter
     private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly TelemetryClient? _telemetry;
 
-    public McpRoleInvocationFilter(IHttpContextAccessor httpContextAccessor, TelemetryClient? telemetry)
+    public McpRoleInvocationFilter(IHttpContextAccessor httpContextAccessor, IServiceProvider services)
     {
         _httpContextAccessor = httpContextAccessor;
-        _telemetry = telemetry;
+        _telemetry = services.GetService<TelemetryClient>();
     }
 
     public async Task OnFunctionInvocationAsync(FunctionInvocationContext context, Func<FunctionInvocationContext, Task> next)

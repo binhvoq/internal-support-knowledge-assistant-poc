@@ -12,6 +12,7 @@ config/azure.local.json
 config/azure.resources.state.json
 config/entra.provision.state.json
 config/entra-browser-session.local.json
+config/entra-browser-session.agent.local.json
 config/.api-token.tmp.txt
 config/.msal-export.tmp.json
 src/**/appsettings.Development.json

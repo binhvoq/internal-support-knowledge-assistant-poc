@@ -33,6 +33,8 @@ public static class TicketLifecycleMutation
         ticket.Status = status;
         if (status == TicketStatus.Resolved)
             ticket.FinalAnswer = finalAnswer!.Trim();
+        else if (finalAnswer is not null)
+            ticket.FinalAnswer = string.IsNullOrWhiteSpace(finalAnswer) ? null : finalAnswer.Trim();
         else if (status == TicketStatus.Reopened)
             ticket.FinalAnswer = null;
 

@@ -46,6 +46,18 @@ public sealed class TicketLifecycleMutationTests
     }
 
     [Fact]
+    public void TryMutateStatus_non_resolved_can_save_edited_answer()
+    {
+        var ticket = CreateTicket(TicketStatus.Reopened, activeSaga: null, sagaEpoch: 2);
+
+        var ok = TicketLifecycleMutation.TryMutateStatus(ticket, TicketStatus.Reopened, "Draft answer", out _);
+
+        Assert.True(ok);
+        Assert.Equal(TicketStatus.Reopened, ticket.Status);
+        Assert.Equal("Draft answer", ticket.FinalAnswer);
+    }
+
+    [Fact]
     public void TryMutateStatus_rejects_unknown_status()
     {
         var ticket = CreateTicket(TicketStatus.New, activeSaga: null, sagaEpoch: 0);

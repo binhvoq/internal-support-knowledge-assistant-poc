@@ -2,6 +2,7 @@ using System.Text;
 using System.Net.Http.Json;
 using Microsoft.ApplicationInsights;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol.Client;
@@ -28,13 +29,13 @@ public sealed class McpToolGateway : IAsyncDisposable
         IOptions<ServiceEndpointsOptions> endpoints,
         IHttpClientFactory httpClientFactory,
         IHttpContextAccessor httpContextAccessor,
-        TelemetryClient? telemetry,
+        IServiceProvider services,
         ILogger<McpToolGateway> logger)
     {
         _endpoints = endpoints.Value;
         _httpClientFactory = httpClientFactory;
         _httpContextAccessor = httpContextAccessor;
-        _telemetry = telemetry;
+        _telemetry = services.GetService<TelemetryClient>();
         _logger = logger;
     }
 
