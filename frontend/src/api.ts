@@ -25,14 +25,45 @@ export type KnowledgeDocument = {
   updatedAt: string;
 };
 
+let tokenProvider: (() => Promise<string | null>) | null = null;
+
+/** Gan ham lay Bearer token (MSAL) — dung sau khi co AuthProvider */
+export function setAccessTokenProvider(fn: () => Promise<string | null>) {
+  tokenProvider = fn;
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (init?.headers) {
+    const h = init.headers as Record<string, string>;
+    Object.assign(headers, h);
+  }
+  if (tokenProvider) {
+    const token = await tokenProvider();
+    if (token) headers.Authorization = `Bearer ${token}`;
+  }
   const res = await fetch(url, {
     ...init,
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
+    headers,
   });
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(err || res.statusText);
+    let msg = err || res.statusText;
+    try {
+      const body = JSON.parse(err) as { error?: string; title?: string };
+      if (body.error) msg = body.error;
+      else if (body.title) msg = body.title;
+    } catch {
+      /* plain text */
+    }
+    if (res.status === 401) {
+      msg = `Chua dang nhap hoac token het han. Vao tab Entra / Login de lay Bearer token. (${msg})`;
+    } else if (res.status === 403) {
+      msg = `Khong du quyen Entra (403). Can role phu hop (Employee / Agent / KnowledgeAdmin). (${msg})`;
+    } else {
+      msg = `HTTP ${res.status}: ${msg}`;
+    }
+    throw new Error(msg);
   }
   return res.json() as Promise<T>;
 }
@@ -40,6 +71,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 export const api = {
   createTicket: (body: { employeeId: string; question: string; category?: string }) =>
     request<Ticket>(`${ticketBase}/tickets`, { method: 'POST', body: JSON.stringify(body) }),
+  listMyTickets: () => request<Ticket[]>(`${ticketBase}/tickets/mine`),
   listTickets: (status?: string, category?: string) => {
     const params = new URLSearchParams();
     if (status) params.set('status', status);

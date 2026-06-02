@@ -1,7 +1,9 @@
+using System.Security.Claims;
 using System.Text.Json;
 using MassTransit;
 using MassTransit.EntityFrameworkCoreIntegration;
 using Microsoft.EntityFrameworkCore;
+using SupportPoc.Shared.Auth;
 using SupportPoc.Shared.Contracts;
 using SupportPoc.Shared.Messaging;
 using SupportPoc.Shared.Models;
@@ -10,6 +12,10 @@ using SupportPoc.TicketService.Data;
 using SupportPoc.TicketService.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+
+var entraEnabled = builder.Configuration.IsEntraEnabled();
+if (entraEnabled)
+    builder.Services.AddSupportPocEntraAuth(builder.Configuration);
 
 builder.Services.Configure<ServiceBusOptions>(builder.Configuration.GetSection(ServiceBusOptions.SectionName));
 builder.Services.AddDbContext<TicketDbContext>(options =>
@@ -56,6 +62,8 @@ builder.Services.AddMassTransit(mt =>
 
 var app = builder.Build();
 app.UseCors();
+if (entraEnabled)
+    app.UseSupportPocEntraAuth();
 
 using (var scope = app.Services.CreateScope())
 {
@@ -67,7 +75,8 @@ using (var scope = app.Services.CreateScope())
 
 var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 
-app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "ticket-service" }));
+app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "ticket-service" }))
+    .AllowAnonymous();
 
 // /debug/outbox query bang OutboxMessage cua MassTransit thay vi bang custom cu.
 app.MapGet("/debug/outbox", async (TicketDbContext db) =>
@@ -86,7 +95,7 @@ app.MapGet("/debug/outbox", async (TicketDbContext db) =>
         })
         .ToListAsync();
     return Results.Ok(items);
-});
+}).AllowAnonymous();
 
 app.MapGet("/debug/inbox", async (TicketDbContext db) =>
 {
@@ -96,7 +105,7 @@ app.MapGet("/debug/inbox", async (TicketDbContext db) =>
         .Select(x => new { x.MessageId, x.ConsumerId, x.Received, x.Consumed, x.ReceiveCount })
         .ToListAsync();
     return Results.Ok(items);
-});
+}).AllowAnonymous();
 
 app.MapGet("/debug/idempotency", async (TicketDbContext db) =>
 {
@@ -106,7 +115,7 @@ app.MapGet("/debug/idempotency", async (TicketDbContext db) =>
         .Select(x => new { x.Scope, x.Key, x.RequestHash, x.StatusCode, x.CreatedAt })
         .ToList();
     return Results.Ok(items);
-});
+}).AllowAnonymous();
 
 app.MapPost("/tickets", async (
     CreateTicketRequest request,
@@ -131,13 +140,22 @@ app.MapPost("/tickets", async (
         }
     }
 
+    var isService = httpContext.User.IsInRole(AppRoleNames.Service);
+    var ownerOid = EntraTicketAccess.GetUserOid(httpContext.User);
+    var employeeId = isService
+        ? request.EmployeeId.Trim()
+        : (httpContext.User.FindFirstValue("preferred_username")
+           ?? httpContext.User.Identity?.Name
+           ?? request.EmployeeId.Trim());
+
     var category = string.IsNullOrWhiteSpace(request.Category) ? SupportCategory.Other : request.Category;
     var now = DateTimeOffset.UtcNow;
     var ids = await db.Tickets.Select(t => t.Id).ToListAsync();
     var entity = new TicketEntity
     {
         Id = TicketIdGenerator.Next(ids),
-        EmployeeId = request.EmployeeId.Trim(),
+        EmployeeId = employeeId,
+        OwnerOid = isService ? null : ownerOid,
         Category = category,
         Question = request.Question.Trim(),
         Status = TicketStatus.New,
@@ -176,7 +194,7 @@ app.MapPost("/tickets", async (
     await db.SaveChangesAsync();
 
     return Results.Created($"/tickets/{entity.Id}", dto);
-});
+}).WithEntraPolicy(entraEnabled, PolicyNames.UserOrService);
 
 app.MapGet("/tickets", async (string? status, string? category, TicketDbContext db) =>
 {
@@ -188,13 +206,31 @@ app.MapGet("/tickets", async (string? status, string? category, TicketDbContext 
 
     var items = (await query.ToListAsync()).OrderByDescending(t => t.CreatedAt).ToList();
     return Results.Ok(items.Select(TicketMapper.ToDto));
-});
+}).WithEntraPolicy(entraEnabled, PolicyNames.AgentOrService);
 
-app.MapGet("/tickets/{id}", async (string id, TicketDbContext db) =>
+app.MapGet("/tickets/mine", async (HttpContext httpContext, TicketDbContext db) =>
+{
+    var oid = EntraTicketAccess.GetUserOid(httpContext.User);
+    if (string.IsNullOrWhiteSpace(oid))
+        return Results.Unauthorized();
+
+    var username = httpContext.User.FindFirstValue("preferred_username") ?? httpContext.User.Identity?.Name;
+    var items = await db.Tickets
+        .Where(t => t.OwnerOid == oid || (t.OwnerOid == null && username != null && t.EmployeeId == username))
+        .OrderByDescending(t => t.CreatedAt)
+        .ToListAsync();
+    return Results.Ok(items.Select(TicketMapper.ToDto));
+}).WithEntraPolicy(entraEnabled, PolicyNames.EmployeeOrAbove);
+
+app.MapGet("/tickets/{id}", async (string id, HttpContext httpContext, TicketDbContext db) =>
 {
     var entity = await db.Tickets.FindAsync(id);
-    return entity is null ? Results.NotFound() : Results.Ok(TicketMapper.ToDto(entity));
-});
+    if (entity is null)
+        return Results.NotFound();
+    if (entraEnabled && !EntraTicketAccess.CanReadTicket(entity.OwnerOid, entity.EmployeeId, httpContext.User))
+        return Results.Forbid();
+    return Results.Ok(TicketMapper.ToDto(entity));
+}).WithEntraPolicy(entraEnabled, PolicyNames.UserOrService);
 
 // Source-of-truth read model cho Saving timeout recovery (AiOrchestrator probe).
 app.MapGet("/internal/tickets/{id}/saga-progress", async (string id, TicketDbContext db) =>
@@ -220,7 +256,7 @@ app.MapGet("/internal/tickets/{id}/saga-progress", async (string id, TicketDbCon
         aiDraftRelatedDocumentsJson = entity.AiDraftRelatedDocumentsJson,
         sagaStopNote = entity.SagaStopNote
     });
-});
+}).WithEntraPolicy(entraEnabled, PolicyNames.Service);
 
 app.MapPost("/tickets/{id}/resolve", async (string id, ResolveTicketRequest request, HttpContext httpContext, TicketDbContext db) =>
 {
@@ -265,7 +301,7 @@ app.MapPost("/tickets/{id}/resolve", async (string id, ResolveTicketRequest requ
     await db.SaveChangesAsync();
 
     return Results.Ok(dto);
-});
+}).WithEntraPolicy(entraEnabled, PolicyNames.AgentOrService);
 
 app.MapPost("/tickets/{id}/reopen", async (string id, TicketDbContext db) =>
 {
@@ -276,7 +312,7 @@ app.MapPost("/tickets/{id}/reopen", async (string id, TicketDbContext db) =>
     entity.UpdatedAt = DateTimeOffset.UtcNow;
     await db.SaveChangesAsync();
     return Results.Ok(TicketMapper.ToDto(entity));
-});
+}).WithEntraPolicy(entraEnabled, PolicyNames.AgentOrService);
 
 app.Run();
 

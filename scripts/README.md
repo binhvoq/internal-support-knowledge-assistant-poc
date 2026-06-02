@@ -11,6 +11,7 @@ PoC nay la **Internal Support Knowledge Assistant**: employee tao support ticket
 | [`../docs/technical_learn.md`](../docs/technical_learn.md) | Checklist cong nghe can luyen. Chi doc, khong tu y sua neu owner khong yeu cau. |
 | [`../docs/mini_business_poc.md`](../docs/mini_business_poc.md) | Mo ta nghiep vu mini va cach gan Microservices, Event-Driven, RAG, Saga, Idempotency, Inbox, Outbox vao flow. |
 | [`../docs/saga-orchestration-timeout-recovery.md`](../docs/saga-orchestration-timeout-recovery.md) | Saga timeout recovery, fault injection, unit test va debug. |
+| [`../docs/zero-trust-identity.md`](../docs/zero-trust-identity.md) | Zero Trust Identity: muc tieu, Entra roles, tien trinh, link MS Learn. |
 | [`../docs/user_stories.md`](../docs/user_stories.md) | User stories va acceptance criteria de implement/kiem tra PoC. |
 | [`../SupportPoc.slnx`](../SupportPoc.slnx) | Solution .NET backend. |
 | [`../frontend`](../frontend) | React UI. |
@@ -30,12 +31,20 @@ PoC nay la **Internal Support Knowledge Assistant**: employee tao support ticket
 | Script | Muc dich | Khi nao dung |
 |--------|----------|--------------|
 | [`provision-azure.sh`](provision-azure.sh) | Tao moi Azure Resource Group, Storage, Service Bus, AI Search, Azure OpenAI, ghi `config/azure.local.json`, sync appsettings. | Lan dau tao Azure resources hoac can provision lai tu dau. |
+| [`provision-entra.sh`](provision-entra.sh) | Tao Entra apps/roles/scopes tuong duong `infra/terraform/identity.tf` (khong `terraform apply`). Xem [`PROVISION-ENTRA.md`](PROVISION-ENTRA.md). | Bat dau Zero Trust Identity phase 1. |
 | [`refresh-azure-config.sh`](refresh-azure-config.sh) | Doc resources dang co trong RG va ghi lai config local. | RG da ton tai, can cap nhat key/endpoint vao local. |
 | [`sync-config.sh`](sync-config.sh) | Dong bo `config/azure.local.json` sang `src/*/appsettings.Development.json` **va dotnet user-secrets** (tranh stale override). | Da co config local va chi can apply vao services. |
 | [`azure-resources-stop.sh`](azure-resources-stop.sh) | Luu state resource roi xoa RG de giam chi phi. | Khi dung PoC xong va muon tat Azure resources ton phi. |
 | [`azure-resources-start.sh`](azure-resources-start.sh) | Bat lai resources: refresh neu RG con ton tai, provision neu RG da bi xoa. | Khi muon chay lai PoC sau khi stop. |
 | [`restart-services.sh`](restart-services.sh) | Build va restart 4 backend local tren ports 5001-5004. | Sau khi sync config hoac sua backend. |
-| [`smoke-test.sh`](smoke-test.sh) | Chay flow dev end-to-end: health, MCP tools, re-index, tao ticket, AI suggestion, chat, resolve. | De xac nhan PoC dang work. |
+| [`smoke-test.sh`](smoke-test.sh) | Chay flow dev end-to-end: health, MCP tools, re-index, tao ticket, AI suggestion, chat, resolve. Khi `AzureAd:Enabled=true`: tu dong dung client credentials; re-index can `SMOKE_BEARER_TOKEN` (user JWT). | De xac nhan PoC dang work. |
+
+**Entra login + E2E:** Doc day du [`../docs/zero-trust-identity.md`](../docs/zero-trust-identity.md) §5, §10, §11.
+
+1. `bash scripts/provision-entra.sh` → `bash scripts/sync-config.sh`
+2. `bash scripts/restart-services.sh` && `cd frontend && npm run dev`
+3. Login tab Entra/Login — redirect URI: `localhost:5173` **va** `127.0.0.1:5173`
+4. Handoff phien (gitignored): `config/entra-browser-session.local.json` (mau: `config/entra-browser-session.local.json.example`)
 
 Saga timeout / fault injection / unit test: xem [`../docs/saga-orchestration-timeout-recovery.md`](../docs/saga-orchestration-timeout-recovery.md).
 
@@ -76,10 +85,10 @@ bash scripts/smoke-test.sh
 
 Ket qua smoke test hop le:
 
-- MCP tools count >= 5.
+- MCP tools count >= 5 va Employee allowed-tools chi gom read-safe tools.
 - Re-index `Completed`.
 - Ticket moi di tu `Analyzing` sang `Suggested`.
-- AI chat tra ve status ticket.
+- AI chat Employee khong duoc doc ticket cheo qua `get_ticket`; Agent/privileged flow moi doc ticket chung.
 - Resolve ket thuc voi `status=Resolved OK`.
 
 ## Flow Terraform moi

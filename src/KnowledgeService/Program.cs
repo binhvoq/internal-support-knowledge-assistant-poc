@@ -8,10 +8,15 @@ using SupportPoc.KnowledgeService.Data;
 using SupportPoc.KnowledgeService.Options;
 using SupportPoc.KnowledgeService.Search;
 using SupportPoc.KnowledgeService.Services;
+using SupportPoc.Shared.Auth;
 using SupportPoc.Shared.Messaging;
 using SupportPoc.Shared.Models;
 
 var builder = WebApplication.CreateBuilder(args);
+
+var entraEnabled = builder.Configuration.IsEntraEnabled();
+if (entraEnabled)
+    builder.Services.AddSupportPocEntraAuth(builder.Configuration);
 
 builder.Services.Configure<AzureSearchOptions>(builder.Configuration.GetSection(AzureSearchOptions.SectionName));
 builder.Services.Configure<AzureOpenAIOptions>(builder.Configuration.GetSection(AzureOpenAIOptions.SectionName));
@@ -46,6 +51,8 @@ builder.Services.AddMassTransit(mt =>
 
 var app = builder.Build();
 app.UseCors();
+if (entraEnabled)
+    app.UseSupportPocEntraAuth();
 
 using (var scope = app.Services.CreateScope())
 {
@@ -90,13 +97,14 @@ static KnowledgeDocumentDto ToDto(KnowledgeDocumentEntity e) => new()
     UpdatedAt = e.UpdatedAt
 };
 
-app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "knowledge-service" }));
+app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "knowledge-service" }))
+    .AllowAnonymous();
 
 app.MapGet("/documents", async (KnowledgeDbContext db) =>
 {
     var docs = await db.Documents.OrderBy(d => d.Id).ToListAsync();
     return Results.Ok(docs.Select(ToDto));
-});
+}).WithEntraPolicy(entraEnabled, PolicyNames.UserOrService);
 
 app.MapPost("/documents", async (
     CreateDocumentRequest request,
@@ -134,9 +142,10 @@ app.MapPost("/documents", async (
         app.Logger.LogWarning(ex, "Publish KnowledgeDocumentUploaded that bai; tiep tuc local flow.");
     }
     return Results.Created($"/documents/{entity.Id}", ToDto(entity));
-});
+}).WithEntraPolicy(entraEnabled, PolicyNames.KnowledgeAdmin);
 
-app.MapGet("/documents/reindex-status", (ReindexState state) => Results.Ok(state.Snapshot()));
+app.MapGet("/documents/reindex-status", (ReindexState state) => Results.Ok(state.Snapshot()))
+    .WithEntraPolicy(entraEnabled, PolicyNames.KnowledgeAdmin);
 
 app.MapPost("/documents/reindex", async (
     HttpContext httpContext,
@@ -206,7 +215,7 @@ app.MapPost("/documents/reindex", async (
         state.Set("Failed", ex.Message);
         return Results.Problem(detail: ex.Message, title: "Re-index that bai");
     }
-});
+}).WithEntraPolicy(entraEnabled, PolicyNames.KnowledgeAdmin);
 
 app.MapGet("/search", async (
     string query,
@@ -260,9 +269,10 @@ app.MapGet("/search", async (
     var results = await SearchResultEnricher.WithContentAsync(db, hits, cancellationToken);
 
     return Results.Ok(new { query, mode = normalizedMode, results });
-});
+}).WithEntraPolicy(entraEnabled, PolicyNames.UserOrService);
 
-app.MapGet("/categories", () => Results.Ok(SupportCategory.All));
+app.MapGet("/categories", () => Results.Ok(SupportCategory.All))
+    .WithEntraPolicy(entraEnabled, PolicyNames.UserOrService);
 
 app.MapGet("/debug/idempotency", async (KnowledgeDbContext db) =>
 {
@@ -273,7 +283,7 @@ app.MapGet("/debug/idempotency", async (KnowledgeDbContext db) =>
         .Select(x => new { x.Scope, x.Key, x.RequestHash, x.StatusCode, x.CreatedAt })
         .ToList();
     return Results.Ok(items);
-});
+}).AllowAnonymous();
 
 app.Run();
 

@@ -133,3 +133,72 @@ variable "tags" {
     environment = "poc"
   }
 }
+
+# ---------- Microsoft Entra ID (Zero Trust Identity — phase 1) ----------
+
+variable "enable_entra_identity" {
+  type        = bool
+  description = "Provision Entra app registrations, app roles, and MCP service principal via Terraform."
+  default     = true
+}
+
+variable "tenant_id" {
+  type        = string
+  description = "Microsoft Entra tenant ID. Empty uses the tenant from az login."
+  default     = "88a56b4b-d214-4a74-bb3d-aacc38429f62"
+}
+
+variable "tenant_domain" {
+  type        = string
+  description = "Primary tenant domain (for docs and MSAL authority hints)."
+  default     = "binhthedevgmail.onmicrosoft.com"
+}
+
+variable "spa_redirect_uris" {
+  type        = list(string)
+  description = "Redirect URIs for the React SPA (MSAL PKCE)."
+  default     = ["http://localhost:5173/", "http://127.0.0.1:5173/"]
+}
+
+variable "entra_client_secret_days" {
+  type        = number
+  description = "Validity period for the MCP service client secret created by Terraform."
+  default     = 365
+}
+
+variable "bootstrap_user_id" {
+  type        = string
+  description = "Fallback Entra object ID when role-specific bootstrap principal IDs are empty."
+  default     = "c0656246-0907-4c6f-8871-25b622341cb3"
+}
+
+variable "bootstrap_employee_principal_id" {
+  type        = string
+  description = "Entra object ID for Support.Employee bootstrap. Empty uses bootstrap_user_id."
+  default     = ""
+}
+
+variable "bootstrap_agent_principal_id" {
+  type        = string
+  description = "Entra object ID for Support.Agent bootstrap. Empty uses bootstrap_user_id."
+  default     = ""
+}
+
+variable "bootstrap_knowledge_admin_principal_id" {
+  type        = string
+  description = "Entra object ID for Support.KnowledgeAdmin bootstrap. Empty uses bootstrap_user_id."
+  default     = ""
+}
+
+variable "bootstrap_role_assignments" {
+  type        = map(string)
+  description = "Deprecated override — prefer bootstrap_*_principal_id. Kept for backward compat."
+  default     = null
+  nullable    = true
+}
+
+variable "allow_bootstrap_multi_role_principal" {
+  type        = bool
+  description = "Cho phep mot principal giu nhieu app role trong bootstrap (chi nen dung cho PoC demo)."
+  default     = true
+}

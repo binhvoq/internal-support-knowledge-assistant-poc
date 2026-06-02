@@ -4,6 +4,8 @@ public sealed class TicketEntity
 {
     public required string Id { get; set; }
     public required string EmployeeId { get; set; }
+    /// <summary>Entra object id cua user tao ticket (delegated token).</summary>
+    public string? OwnerOid { get; set; }
     public required string Category { get; set; }
     public required string Question { get; set; }
     public required string Status { get; set; }

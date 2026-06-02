@@ -1,73 +1,51 @@
-# React + TypeScript + Vite
+# Support PoC — Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+## Đăng nhập Entra + gọi API (Zero Trust)
 
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+bash scripts/provision-entra.sh   # một lần
+bash scripts/sync-config.sh       # tạo frontend/.env.local + AzureAd backend
+bash scripts/restart-services.sh  # 4 backend :5001-5004
+cd frontend && npm install && npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Mở **http://localhost:5173** hoặc **http://127.0.0.1:5173** → tab **Entra / Login** → **Đăng nhập Microsoft**.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+Sau login, UI hiển thị token decode (`aud`, `scp`, `roles`, `oid`). `api.ts` gắn `Authorization: Bearer` cho mọi request backend.
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+### E2E sau login
+
+| Tab | Cần role | Kỳ vọng |
+|-----|----------|---------|
+| Employee | Employee+ | Tạo ticket OK |
+| Support Queue | Agent | List tickets OK |
+| Knowledge Admin | KnowledgeAdmin | CRUD / re-index OK |
+| AI Chat | Employee+ | HTTP 200 (nội dung chat: xem bug mở trong doc) |
+
+Không login → API trả **401 Unauthorized** (đúng Zero Trust).
+
+Refresh trang **không** cần login lại (MSAL `sessionStorage`). Đóng tab → login lại.
+
+## Env (`.env.local`)
+
+| Biến | Mô tả |
+|------|--------|
+| `VITE_AAD_CLIENT_ID` | SPA app (Entra) |
+| `VITE_AAD_AUTHORITY` | `https://login.microsoftonline.com/{tenant}` |
+| `VITE_AAD_API_SCOPE` | `api://{api-app-id}/access_as_user` |
+| `VITE_TICKET_API` | Mặc định `http://localhost:5001` |
+
+Mẫu: [`.env.example`](.env.example)
+
+## Handoff cho AI khác
+
+Sau login, lưu phiên (gitignored): [`../config/entra-browser-session.local.json`](../config/entra-browser-session.local.json)
+Mẫu: [`../config/entra-browser-session.local.json.example`](../config/entra-browser-session.local.json.example)
+
+## Ghi chú MSAL
+
+- **loginPopup**; popup bị chặn → redirect.
+- Redirect URI Entra: `http://localhost:5173/` **và** `http://127.0.0.1:5173/` (tránh AADSTS50011).
+- Lỗi redirect URI: chạy lại `provision-entra.sh` hoặc xem §10 trong doc Zero Trust.
+
+Tài liệu đầy đủ: [`../docs/zero-trust-identity.md`](../docs/zero-trust-identity.md)

@@ -6,15 +6,28 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 4.0"
     }
+    azuread = {
+      source  = "hashicorp/azuread"
+      version = "~> 3.0"
+    }
     local = {
       source  = "hashicorp/local"
       version = "~> 2.5"
+    }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.12"
     }
   }
 }
 
 provider "azurerm" {
   features {}
+}
+
+provider "azuread" {
+  # Empty tenant_id => use tenant from `az login`. Set var.tenant_id for explicit tenant.
+  tenant_id = var.tenant_id != "" ? var.tenant_id : null
 }
 
 locals {
@@ -27,7 +40,7 @@ locals {
   openai_chat_name     = "${var.prefix}-oai-chat-${var.suffix}"
   config_path          = abspath("${path.module}/../../config/azure.local.json")
 
-  azure_local_config = {
+  azure_local_config = merge({
     resourceGroup = azurerm_resource_group.poc.name
     location      = azurerm_resource_group.poc.location
     serviceBus = {
@@ -50,7 +63,10 @@ locals {
     storage = {
       connectionString = azurerm_storage_account.docs.primary_connection_string
     }
-  }
+    applicationInsights = {
+      connectionString = azurerm_application_insights.poc.connection_string
+    }
+  }, local.entra_config != null ? { entra = local.entra_config } : {})
 }
 
 resource "azurerm_resource_group" "poc" {

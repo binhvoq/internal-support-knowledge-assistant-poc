@@ -1,15 +1,25 @@
 import { useEffect, useRef, useState } from 'react';
 import './App.css';
-import { api, type KnowledgeDocument, type Ticket } from './api';
+import { api, setAccessTokenProvider, type KnowledgeDocument, type Ticket } from './api';
+import { AuthRequiredBanner } from './auth/AuthRequiredBanner';
+import { AuthTestPanel } from './auth/AuthTestPanel';
+import { useAuth } from './auth/AuthContext';
+import { apiScope } from './auth/msalConfig';
 
-type View = 'employee' | 'queue' | 'detail' | 'knowledge' | 'chat';
+type View = 'employee' | 'queue' | 'detail' | 'knowledge' | 'chat' | 'auth';
 
 const categories = ['IT', 'HR', 'Finance', 'Other'];
 const statuses = ['New', 'Analyzing', 'Suggested', 'Resolved', 'Reopened'];
 
 function App() {
-  const [view, setView] = useState<View>('employee');
+  const [view, setView] = useState<View>('auth');
   const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
+  const auth = useAuth();
+
+  useEffect(() => {
+    if (!auth.configured) return;
+    setAccessTokenProvider(() => auth.getAccessToken(apiScope ? [apiScope] : undefined));
+  }, [auth.configured, auth.getAccessToken, auth.account]);
 
   return (
     <div className="app">
@@ -17,6 +27,7 @@ function App() {
       <nav>
         {(
           [
+            ['auth', 'Entra / Login'],
             ['employee', 'Employee'],
             ['queue', 'Support Queue'],
             ['knowledge', 'Knowledge Admin'],
@@ -41,6 +52,7 @@ function App() {
         )}
       </nav>
 
+      {view === 'auth' && <AuthTestPanel />}
       {view === 'employee' && <EmployeeView />}
       {view === 'queue' && (
         <QueueView
@@ -60,11 +72,36 @@ function App() {
 }
 
 function EmployeeView() {
+  const auth = useAuth();
   const [employeeId, setEmployeeId] = useState('EMP-001');
   const [question, setQuestion] = useState('');
   const [category, setCategory] = useState('');
   const [created, setCreated] = useState<Ticket | null>(null);
+  const [myTickets, setMyTickets] = useState<Ticket[]>([]);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (auth.account?.username) setEmployeeId(auth.account.username);
+  }, [auth.account?.username]);
+
+  useEffect(() => {
+    if (!auth.account) {
+      setMyTickets([]);
+      return;
+    }
+    let cancelled = false;
+    api
+      .listMyTickets()
+      .then((data) => {
+        if (!cancelled) setMyTickets(data);
+      })
+      .catch(() => {
+        if (!cancelled) setMyTickets([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [auth.account, created?.id]);
 
   const submit = async () => {
     setError('');
@@ -92,9 +129,11 @@ function EmployeeView() {
   return (
     <div className="card">
       <h2>Tao cau hoi ho tro</h2>
-      <label>Employee ID</label>
+      <AuthRequiredBanner action="tao ticket" />
+      <label>Employee ID (tu Entra khi da dang nhap)</label>
       <input
         value={employeeId}
+        readOnly={Boolean(auth.account)}
         onChange={(e) => {
           setEmployeeId(e.target.value);
           if (error) setError('');
@@ -126,6 +165,19 @@ function EmployeeView() {
           Da tao {created.id} — status: {created.status}. AI se xu ly trong giay lat.
         </div>
       )}
+      {myTickets.length > 0 && (
+        <>
+          <h3>Ticket cua toi</h3>
+          <ul className="ticket-mine-list">
+            {myTickets.map((t) => (
+              <li key={t.id}>
+                <strong>{t.id}</strong> — {t.status} — {t.question.slice(0, 60)}
+                {t.question.length > 60 ? '…' : ''}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   );
 }
@@ -134,12 +186,20 @@ function QueueView({ onSelect }: { onSelect: (id: string) => void }) {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [status, setStatus] = useState('');
   const [category, setCategory] = useState('');
+  const [error, setError] = useState('');
 
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
-      const data = await api.listTickets(status || undefined, category || undefined);
-      if (!cancelled) setTickets(data);
+      try {
+        const data = await api.listTickets(status || undefined, category || undefined);
+        if (!cancelled) {
+          setTickets(data);
+          setError('');
+        }
+      } catch (e) {
+        if (!cancelled) setError((e as Error).message);
+      }
     };
     run();
     const t = setInterval(run, 5000);
@@ -152,6 +212,8 @@ function QueueView({ onSelect }: { onSelect: (id: string) => void }) {
   return (
     <div className="card">
       <h2>Support Queue</h2>
+      <AuthRequiredBanner action="xem hang doi (can role Support.Agent)" />
+      {error && <p className="error">{error}</p>}
       <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
         <div>
           <label>Status</label>
@@ -418,6 +480,7 @@ function KnowledgeView() {
   return (
     <div className="card">
       <h2>Knowledge Admin</h2>
+      <AuthRequiredBanner action="quan ly tai lieu (can role Support.KnowledgeAdmin)" />
       <p>
         Re-index status: <strong>{reindexStatus}</strong>
       </p>
@@ -501,6 +564,7 @@ function ChatView() {
   return (
     <div className="card">
       <h2>AI Chat (Function Calling)</h2>
+      <AuthRequiredBanner action="dung AI Chat" />
       <p>
         Thu hoi: tao ticket, hoi trang thai ticket, tim tai lieu noi bo, hoac resolve ticket qua lenh tu
         nhien.

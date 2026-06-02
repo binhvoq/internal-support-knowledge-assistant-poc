@@ -1,0 +1,36 @@
+{
+  "_handoff": {
+    "purpose": "Mau handoff — copy thanh entra-browser-session.local.json sau khi user login (gitignored). KHONG commit file that.",
+    "frontendUrl": "http://localhost:5173/",
+    "whyNoReloginOnRefresh": "MSAL cache trong sessionStorage (msal.*) + refresh token.",
+    "nextStepsForAi": [
+      "Doc day du: docs/zero-trust-identity.md — PoC Identity DA CHOT (§0, §5); PIM/Identity Protection/CA out-of-scope (§13-§14)",
+      "Restart: bash scripts/restart-services.sh",
+      "E2E: login UI hoac dung apiAccessToken trong file that"
+    ]
+  },
+  "account": {
+    "name": "...",
+    "username": "...",
+    "oid": "...",
+    "tenantId": "...",
+    "homeAccountId": "...",
+    "roles": ["Support.Employee", "Support.Agent", "Support.KnowledgeAdmin"]
+  },
+  "entraApps": {
+    "spaClientId": "...",
+    "apiClientId": "...",
+    "apiScope": "api://.../access_as_user",
+    "audience": "api://...",
+    "authority": "https://login.microsoftonline.com/{tenantId}"
+  },
+  "services": {
+    "ticketApi": "http://localhost:5001",
+    "knowledgeApi": "http://localhost:5002",
+    "aiApi": "http://localhost:5003",
+    "mcpApi": "http://localhost:5004"
+  },
+  "e2eResults": {},
+  "apiAccessToken": "<delegated JWT — het han ~1h>",
+  "apiAccessTokenExpiresUnix": 0
+}

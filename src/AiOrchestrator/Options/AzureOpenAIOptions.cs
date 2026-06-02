@@ -8,7 +8,13 @@ public sealed class AzureOpenAIOptions
     public string? ChatEndpoint { get; set; }
     public string? ChatApiKey { get; set; }
     public string ChatDeployment { get; set; } = "gpt-4.1-mini";
+    /// <summary>Neu false: Semantic Kernel chat/pipeline dung MCP fallback (dev khi chat endpoint DNS fail).</summary>
+    public bool? ChatEnabled { get; set; }
     public string ChatEndpointResolved => ChatEndpoint ?? Endpoint ?? "";
     public string ChatApiKeyResolved => ChatApiKey ?? ApiKey ?? "";
-    public bool Enabled => !string.IsNullOrWhiteSpace(ChatEndpointResolved) && !string.IsNullOrWhiteSpace(ChatApiKeyResolved);
+    public bool ChatConfigured =>
+        !string.IsNullOrWhiteSpace(ChatEndpointResolved) && !string.IsNullOrWhiteSpace(ChatApiKeyResolved);
+    public bool ChatEnabledResolved => ChatEnabled ?? ChatConfigured;
+    /// <summary>Alias — giu tuong thich voi code cu.</summary>
+    public bool Enabled => ChatEnabledResolved;
 }

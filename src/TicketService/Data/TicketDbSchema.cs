@@ -64,5 +64,10 @@ internal static class TicketDbSchema
             await db.Database.ExecuteSqlRawAsync(
                 "ALTER TABLE Tickets ADD COLUMN SagaStopNote TEXT NULL",
                 cancellationToken);
+
+        if (!columns.Contains("OwnerOid"))
+            await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE Tickets ADD COLUMN OwnerOid TEXT NULL",
+                cancellationToken);
     }
 }
