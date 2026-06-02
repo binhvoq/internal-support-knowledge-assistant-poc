@@ -89,6 +89,8 @@ AI Assistant co the dung Function Calling cho cac tac vu nho:
 
 Vi du employee hoi: "Ticket hom qua cua toi xu ly den dau roi?" AI se goi `get_ticket_status` thay vi chi tra loi bang text.
 
+Ghi chu Zero Trust: neu function/tool doc ticket thay user, API so huu data phai enforce scope/owner. Employee khong nen dung tool `get_ticket` chung de doc ticket bat ky; production nen co `get_my_ticket` hoac user-context/OBO flow.
+
 ### Flow 4: Saga xu ly ticket moi
 
 Luong tao suggestion duoc xem nhu mot Saga nho do AI Orchestrator dieu phoi:
@@ -434,10 +436,11 @@ GitHub Actions toi thieu:
 
 ### MCP Tool Server
 
-- Tool: `get_ticket`
+- Tool: `get_ticket` (Agent/privileged lookup)
 - Tool: `update_ticket_status`
 - Tool: `search_knowledge`
 - Tool: `list_support_categories`
+- Tool policy contract: role nao duoc advertise/call tool nao; AI Orchestrator chi dua allowed tools cho LLM.
 
 ## 17. Acceptance criteria
 

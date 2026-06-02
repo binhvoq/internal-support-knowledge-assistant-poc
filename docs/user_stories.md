@@ -440,14 +440,16 @@ Output:
 
 #### Acceptance criteria
 
-- MCP Tool Server expose tool `get_ticket`.
-- AI Orchestrator goi duoc tool nay.
+- MCP Tool Server expose tool `get_ticket` cho role Agent/privileged flow.
+- AI Orchestrator chi advertise tool nay khi MCP tool policy contract cho phep role hien tai.
 - Tool tra ve loi ro rang neu ticket khong ton tai.
+- Employee-scoped read khong dung `get_ticket` chung; can tool rieng nhu `get_my_ticket` hoac user-context/OBO flow.
 
 #### Technical notes
 
 - MCP server co the la mot service rieng.
 - Tool implementation goi Ticket Service.
+- Tool-level authorization source of truth nam o MCP ToolServer policy contract; resource-level ownership van nam o Ticket Service.
 
 ### Story 6.2: Expose tool search knowledge qua MCP
 
@@ -653,7 +655,7 @@ PoC duoc xem la hoan thanh khi co the demo end-to-end:
 7. Support Agent xem ticket, AI suggestion va related documents.
 8. Support Agent resolve ticket voi idempotency.
 9. AI Assistant goi duoc it nhat mot Function Calling.
-10. MCP Tool Server expose duoc it nhat `get_ticket` va `search_knowledge`.
+10. MCP Tool Server expose duoc it nhat `get_ticket` va `search_knowledge`, kem tool policy contract de AI Orchestrator chi advertise tool hop role.
 11. Terraform validate pass.
 12. Smoke test local dung Azure config that pass.
 13. GitHub Actions CI pass neu da bat CI trong scope.
@@ -669,7 +671,7 @@ PoC duoc xem la hoan thanh khi co the demo end-to-end:
 7. Tao Azure AI Search index va Vector search flow.
 8. Implement AI Orchestrator voi Inbox va Saga mini.
 9. Them Function Calling cho `get_ticket_status`.
-10. Implement MCP Tool Server voi `get_ticket` va `search_knowledge`.
+10. Implement MCP Tool Server voi `get_ticket`, `search_knowledge`, va tool policy contract theo role.
 11. Them Idempotency cho create/resolve/reindex.
 12. Them Terraform scaffold.
 13. Them GitHub Actions CI neu can.

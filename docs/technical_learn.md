@@ -16,3 +16,4 @@ Saga Pattern Orchestration
 Idempotency
 Inbox Pattern
 Outbox Pattern
+Entra ID
