@@ -1,10 +1,13 @@
 using System.Text;
 using System.Net.Http.Json;
+using Microsoft.ApplicationInsights;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using SupportPoc.AiOrchestrator.Options;
+using SupportPoc.AiOrchestrator.Services;
 using SupportPoc.Shared.Contracts;
 
 namespace SupportPoc.AiOrchestrator.Mcp;
@@ -15,6 +18,8 @@ public sealed class McpToolGateway : IAsyncDisposable
 
     private readonly ServiceEndpointsOptions _endpoints;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IHttpContextAccessor _httpContextAccessor;
+    private readonly TelemetryClient? _telemetry;
     private readonly ILogger<McpToolGateway> _logger;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private McpClient? _client;
@@ -22,10 +27,14 @@ public sealed class McpToolGateway : IAsyncDisposable
     public McpToolGateway(
         IOptions<ServiceEndpointsOptions> endpoints,
         IHttpClientFactory httpClientFactory,
+        IHttpContextAccessor httpContextAccessor,
+        TelemetryClient? telemetry,
         ILogger<McpToolGateway> logger)
     {
         _endpoints = endpoints.Value;
         _httpClientFactory = httpClientFactory;
+        _httpContextAccessor = httpContextAccessor;
+        _telemetry = telemetry;
         _logger = logger;
     }
 
@@ -47,14 +56,46 @@ public sealed class McpToolGateway : IAsyncDisposable
         return policies ?? [];
     }
 
-    public async Task<string> CallToolAsync(
+    public Task<string> CallToolAsync(
         string toolName,
         IReadOnlyDictionary<string, object?> arguments,
         CancellationToken cancellationToken = default)
+        => CallToolAsync(toolName, arguments, context: null, cancellationToken);
+
+    public async Task<string> CallToolAsync(
+        string toolName,
+        IReadOnlyDictionary<string, object?> arguments,
+        McpCallContext? context,
+        CancellationToken cancellationToken = default)
     {
-        var client = await GetClientAsync(cancellationToken);
-        var result = await client.CallToolAsync(toolName, arguments, cancellationToken: cancellationToken);
-        return ExtractText(result);
+        var source = context?.Source ?? McpCallContext.SourceDirect;
+        var ticketId = context?.TicketId ?? McpToolAudit.TryGetTicketId(arguments);
+        var sagaId = context?.SagaCorrelationId;
+        var outcome = "success";
+
+        try
+        {
+            var client = await GetClientAsync(cancellationToken);
+            var result = await client.CallToolAsync(toolName, arguments, cancellationToken: cancellationToken);
+            return ExtractText(result);
+        }
+        catch (Exception ex)
+        {
+            outcome = "error";
+            _logger.LogWarning(ex, "MCP tool {Tool} failed (source={Source}).", toolName, source);
+            throw;
+        }
+        finally
+        {
+            McpToolAudit.TrackInvocation(
+                _telemetry,
+                _httpContextAccessor.HttpContext,
+                source,
+                toolName,
+                outcome,
+                sagaId,
+                ticketId);
+        }
     }
 
     private async Task<McpClient> GetClientAsync(CancellationToken cancellationToken)

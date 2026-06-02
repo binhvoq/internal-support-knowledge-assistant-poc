@@ -105,7 +105,11 @@ public sealed class TicketSuggestionService
             var allowedTools = await _toolAccess.GetAllowedToolNamesAsync(roles, cancellationToken);
             if (!allowedTools.Contains(toolName))
                 return $"Tai khoan hien tai khong duoc dung MCP tool '{toolName}' de doc ticket. Can Agent hoac tool Employee-scoped rieng.";
-            var raw = await _mcp.CallToolAsync(toolName, new Dictionary<string, object?> { ["ticketId"] = ticketId }, cancellationToken);
+            var raw = await _mcp.CallToolAsync(
+                toolName,
+                new Dictionary<string, object?> { ["ticketId"] = ticketId },
+                new McpCallContext(McpCallContext.SourceOfflineChat, TicketId: ticketId),
+                cancellationToken);
             if (TryFormatTicketStatusReply(ticketId, raw, out var formatted))
                 return formatted;
             return raw;

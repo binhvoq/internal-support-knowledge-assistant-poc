@@ -36,8 +36,17 @@ public sealed class AiPipelineService
 
     public sealed record PipelineResult(string Category, string Suggestion, IReadOnlyList<RelatedDocument> Related);
 
-    public async Task<PipelineResult> RunAsync(string question, string requestedCategory, CancellationToken cancellationToken)
+    public Task<PipelineResult> RunAsync(string question, string requestedCategory, CancellationToken cancellationToken)
+        => RunAsync(question, requestedCategory, sagaCorrelationId: null, ticketId: null, cancellationToken);
+
+    public async Task<PipelineResult> RunAsync(
+        string question,
+        string requestedCategory,
+        Guid? sagaCorrelationId,
+        string? ticketId,
+        CancellationToken cancellationToken)
     {
+        var mcpContext = new McpCallContext(McpCallContext.SourcePipeline, sagaCorrelationId, ticketId);
         // FAULT INJECTION: simulate AI failure de verify compensation pattern hoat dong.
         // Consumer se catch va publish IAiPipelineFailed -> saga vao Compensating.
         if (question.Has(FaultInjection.ForceAiFail))
@@ -50,7 +59,7 @@ public sealed class AiPipelineService
         if (string.IsNullOrWhiteSpace(category) || category == SupportCategory.Other)
             category = await ClassifyAsync(question, cancellationToken) ?? SupportCategory.Other;
 
-        var related = await SearchKnowledgeAsync(question, category, cancellationToken);
+        var related = await SearchKnowledgeAsync(question, category, mcpContext, cancellationToken);
         var suggestion = await GenerateAsync(question, related, cancellationToken);
         return new PipelineResult(category, suggestion, related);
     }
@@ -91,7 +100,14 @@ public sealed class AiPipelineService
         }
     }
 
-    public async Task<IReadOnlyList<RelatedDocument>> SearchKnowledgeAsync(string query, string? category, CancellationToken cancellationToken)
+    public Task<IReadOnlyList<RelatedDocument>> SearchKnowledgeAsync(string query, string? category, CancellationToken cancellationToken)
+        => SearchKnowledgeAsync(query, category, mcpContext: null, cancellationToken);
+
+    public async Task<IReadOnlyList<RelatedDocument>> SearchKnowledgeAsync(
+        string query,
+        string? category,
+        McpCallContext? mcpContext,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -101,7 +117,8 @@ public sealed class AiPipelineService
             if (!string.IsNullOrWhiteSpace(category) && category != SupportCategory.Other)
                 args["category"] = category;
 
-            var json = await _mcp.CallToolAsync(toolName, args, cancellationToken);
+            var context = mcpContext ?? new McpCallContext(McpCallContext.SourceSuggestAnswer);
+            var json = await _mcp.CallToolAsync(toolName, args, context, cancellationToken);
             return McpKnowledgeParser.ParseSearchResults(json);
         }
         catch (Exception ex)

@@ -42,7 +42,12 @@ public sealed class RunAiPipelineConsumer : IConsumer<IRunAiPipeline>
 
         try
         {
-            var result = await _pipeline.RunAsync(msg.Question, msg.Category, context.CancellationToken);
+            var result = await _pipeline.RunAsync(
+                msg.Question,
+                msg.Category,
+                msg.CorrelationId,
+                msg.TicketId,
+                context.CancellationToken);
 
             var draftClient = _bus.CreateRequestClient<IRecordAiPipelineDraft>(RecordDraftAddress, DraftRecordRequestTimeout);
             var draftResponse = await draftClient.GetResponse<IAiPipelineDraftRecorded, IAiPipelineDraftRejected>(

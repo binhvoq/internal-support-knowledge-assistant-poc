@@ -8,7 +8,7 @@ public static class McpToolAudit
 {
     public const string EventName = "McpToolInvocation";
 
-    public static (string Oid, string Roles, string CorrelationId) FromHttpContext(HttpContext? http)
+    public static (string Oid, string Roles, string HttpCorrelationId) FromHttpContext(HttpContext? http)
     {
         if (http is null)
             return ("", "", "");
@@ -23,17 +23,41 @@ public static class McpToolAudit
     public static void TrackInvocation(
         TelemetryClient? telemetry,
         HttpContext? http,
+        string source,
         string tool,
-        string outcome)
+        string outcome,
+        Guid? sagaCorrelationId = null,
+        string? ticketId = null)
     {
-        var (oid, roles, correlationId) = FromHttpContext(http);
+        var (oid, roles, httpCorrelationId) = FromHttpContext(http);
         telemetry?.TrackEvent(EventName, new Dictionary<string, string>
         {
-            ["outcome"] = outcome,
+            ["source"] = source,
             ["tool"] = tool,
+            ["outcome"] = outcome,
             ["oid"] = oid,
             ["roles"] = roles,
-            ["correlationId"] = correlationId,
+            ["httpCorrelationId"] = httpCorrelationId,
+            ["sagaCorrelationId"] = sagaCorrelationId?.ToString() ?? "",
+            ["ticketId"] = ticketId ?? "",
         });
+    }
+
+    public static string? TryGetTicketId(IReadOnlyDictionary<string, object?>? arguments)
+    {
+        if (arguments is null)
+            return null;
+
+        foreach (var key in new[] { "ticketId", "ticket_id", "id" })
+        {
+            if (arguments.TryGetValue(key, out var value) && value is not null)
+            {
+                var text = value.ToString();
+                if (!string.IsNullOrWhiteSpace(text))
+                    return text.Trim();
+            }
+        }
+
+        return null;
     }
 }

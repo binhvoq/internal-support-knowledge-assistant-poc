@@ -280,9 +280,8 @@ app.MapPost("/tickets/{id}/resolve", async (string id, ResolveTicketRequest requ
         }
     }
 
-    entity.Status = TicketStatus.Resolved;
-    entity.FinalAnswer = request.FinalAnswer.Trim();
-    entity.UpdatedAt = DateTimeOffset.UtcNow;
+    if (!TicketLifecycleMutation.TryMutateStatus(entity, TicketStatus.Resolved, request.FinalAnswer, out var mutateError))
+        return Results.BadRequest(new { error = mutateError });
 
     var dto = TicketMapper.ToDto(entity);
     if (!string.IsNullOrWhiteSpace(idempotencyKey))
@@ -308,13 +307,63 @@ app.MapPost("/tickets/{id}/reopen", async (string id, TicketDbContext db) =>
     var entity = await db.Tickets.FindAsync(id);
     if (entity is null) return Results.NotFound();
 
-    entity.Status = TicketStatus.Reopened;
-    entity.UpdatedAt = DateTimeOffset.UtcNow;
+    if (!TicketLifecycleMutation.TryMutateStatus(entity, TicketStatus.Reopened, finalAnswer: null, out var reopenError))
+        return Results.BadRequest(new { error = reopenError });
+
     await db.SaveChangesAsync();
     return Results.Ok(TicketMapper.ToDto(entity));
+}).WithEntraPolicy(entraEnabled, PolicyNames.AgentOrService);
+
+app.MapPatch("/tickets/{id}", async (
+    string id,
+    UpdateTicketLifecycleRequest request,
+    HttpContext httpContext,
+    TicketDbContext db) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Status))
+        return Results.BadRequest(new { error = "status la bat buoc." });
+
+    var entity = await db.Tickets.FindAsync(id);
+    if (entity is null)
+        return Results.NotFound();
+
+    var scope = $"PATCH /tickets/{id}";
+    var idempotencyKey = IdempotencyHelper.ReadKey(httpContext);
+    var requestHash = IdempotencyHelper.Hash(scope, request);
+    if (!string.IsNullOrWhiteSpace(idempotencyKey))
+    {
+        var existing = await db.IdempotencyRecords.FindAsync([scope, idempotencyKey], httpContext.RequestAborted);
+        if (existing is not null)
+        {
+            if (existing.RequestHash != requestHash)
+                return Results.Conflict(new { error = "Idempotency-Key da duoc dung voi payload khac." });
+            return IdempotencyHelper.Replay(existing);
+        }
+    }
+
+    if (!TicketLifecycleMutation.TryMutateStatus(entity, request.Status, request.FinalAnswer, out var mutateError))
+        return Results.BadRequest(new { error = mutateError });
+
+    var dto = TicketMapper.ToDto(entity);
+    if (!string.IsNullOrWhiteSpace(idempotencyKey))
+    {
+        db.IdempotencyRecords.Add(new IdempotencyRecordEntity
+        {
+            Scope = scope,
+            Key = idempotencyKey,
+            RequestHash = requestHash,
+            ResponseJson = JsonSerializer.Serialize(dto, jsonOptions),
+            StatusCode = StatusCodes.Status200OK,
+            CreatedAt = DateTimeOffset.UtcNow
+        });
+    }
+
+    await db.SaveChangesAsync();
+    return Results.Ok(dto);
 }).WithEntraPolicy(entraEnabled, PolicyNames.AgentOrService);
 
 app.Run();
 
 public sealed record CreateTicketRequest(string EmployeeId, string Question, string? Category);
 public sealed record ResolveTicketRequest(string? FinalAnswer);
+public sealed record UpdateTicketLifecycleRequest(string Status, string? FinalAnswer);
