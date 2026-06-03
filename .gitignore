@@ -7,6 +7,7 @@ obj/
 node_modules/
 dist/
 .logs/
+logs/
 .env.local
 config/azure.local.json
 config/azure.resources.state.json

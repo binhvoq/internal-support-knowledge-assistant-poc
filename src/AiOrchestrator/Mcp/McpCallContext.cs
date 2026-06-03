@@ -6,9 +6,7 @@ public sealed record McpCallContext(
     Guid? SagaCorrelationId = null,
     string? TicketId = null)
 {
-    public const string SourcePipeline = "pipeline";
     public const string SourceChat = "chat";
     public const string SourceOfflineChat = "offline_chat";
-    public const string SourceSuggestAnswer = "suggest_answer";
     public const string SourceDirect = "direct";
 }

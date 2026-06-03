@@ -29,10 +29,10 @@ Tài liệu này chốt **ý tưởng thiết kế** và **đặc tả hành vi*
 | Thuộc tính | Mô tả |
 |------------|--------|
 | **Kích hoạt** | Sau `TicketCreated` → MassTransit saga (`TicketSuggestionStateMachine`) |
-| **Identity** | Service account (client credentials) khi gọi MCP / API |
+| **Identity** | Service account (client credentials) khi gọi KnowledgeService / API |
 | **Mục tiêu** | Tạo **gợi ý sơ bộ** (`AiSuggestedAnswer`, related docs) cho agent |
 | **Giới hạn** | **Không** tự resolve ticket; không thay agent quyết định cuối |
-| **Implementation** | `AiPipelineService` + `RunAiPipelineConsumer`; MCP `search_knowledge` qua `McpToolGateway` (hardcode tên tool); LLM qua `IChatCompletionService` (không bắt buộc qua `Kernel` cho pipeline) |
+| **Implementation** | `AiPipelineService` + `RunAiPipelineConsumer`; search knowledge gọi thẳng `KnowledgeService` qua typed client; LLM qua `IChatCompletionService` (không bắt buộc qua `Kernel` cho pipeline) |
 
 ### 2.2 Support Copilot (AI Chat)
 
@@ -72,15 +72,15 @@ Tài liệu này chốt **ý tưởng thiết kế** và **đặc tả hành vi*
   │ (automation)│      │  → Ticket API) │    │ (chat)      │
   └──────┬──────┘      └────────────────┘    └──────┬──────┘
          │                                            │
-         └────────────────┬───────────────────────────┘
-                          │
-                 ┌────────▼────────┐
-                 │ McpToolGateway  │  ← P0: audit mọi MCP call
-                 └────────┬────────┘
-                          │
-                 ┌────────▼────────┐
-                 │  McpToolServer  │
-                 └─────────────────┘
+         ▼                                            ▼
+┌──────────────────┐                         ┌────────────────┐
+│ KnowledgeService │                         │ McpToolGateway │
+│ /search          │                         │ tool-calling   │
+└──────────────────┘                         └───────┬────────┘
+                                                      ▼
+                                             ┌────────────────┐
+                                             │ McpToolServer  │
+                                             └────────────────┘
 ```
 
 | Thành phần | Vai trò |
@@ -89,6 +89,7 @@ Tài liệu này chốt **ý tưởng thiết kế** và **đặc tả hành vi*
 | **AiOrchestrator (saga)** | Orchestration bước analyzing → AI → save suggestion; **không** sở hữu ticket entity |
 | **Semantic Kernel** | Connector + tool loop cho **chat**; pipeline PoC **không** unify hết vào SK |
 | **McpToolServer** | Tool implementation + policy contract; **không** duplicate rule lifecycle ticket |
+| **KnowledgeService** | Search source cho auto suggestion; pipeline gọi trực tiếp để tránh phụ thuộc MCP catalog |
 
 ### Trạng thái ticket (model thực tế)
 
@@ -153,20 +154,20 @@ Agent resolve/reopen/PATCH trong lúc saga active → bump epoch → `SaveTicket
 
 `McpToolGateway.CallToolAsync` + `McpRoleInvocationFilter` (plugin `Mcp` từ SK chat) → event `McpToolInvocation` trên App Insights.
 
-Mọi `CallToolAsync` (pipeline, chat, offline fallback) log **cùng format**:
+Mọi MCP `CallToolAsync` / SK plugin call (chat, offline fallback, debug/tool endpoints) log **cùng format**. Auto suggestion pipeline hiện gọi thẳng `KnowledgeService`, nên không tạo `McpToolInvocation` cho bước search nền.
 
 | Field | Ghi chú |
 |-------|---------|
-| `source` | `pipeline` \| `chat` \| `offline_chat` |
+| `source` | `chat` \| `offline_chat` \| direct/debug source nếu có |
 | `tool` | Tên tool MCP |
 | `outcome` | success / error + message ngắn |
 | `oid`, `roles` | Khi có `HttpContext` (chat) |
-| `sagaCorrelationId` | Pipeline — truyền từ caller (optional parameter) |
+| `sagaCorrelationId` | Chỉ có nếu caller MCP truyền explicit context |
 | `ticketId` | Parse từ arguments nếu có |
 
 Dùng `McpToolAudit` → Application Insights event `McpToolInvocation`.
 
-**Không** chỉ dựa `IFunctionInvocationFilter` của SK — pipeline không đi qua filter đó.
+**Không** chỉ dựa `IFunctionInvocationFilter` của SK — các MCP call không đi qua SK vẫn phải dùng gateway nếu cần audit.
 
 Caller truyền `McpCallContext` (`source`, `sagaCorrelationId`, `ticketId`); chat SK qua `McpRoleInvocationFilter`.
 
@@ -174,7 +175,7 @@ Caller truyền `McpCallContext` (`source`, `sagaCorrelationId`, `ticketId`); ch
 
 - Policy trên MCP server (`SupportToolPolicy`) → contract `/internal/mcp/tool-policies`.
 - Chat: `McpToolAccessService` lọc function advertise cho model.
-- Pipeline: service account — **khác actor** với user chat; ghi rõ trong doc/demo, không coi là “lỗi governance” nếu đã thiết kế cố ý.
+- Pipeline: service account gọi trực tiếp KnowledgeService cho search nền; **khác actor** với user chat; ghi rõ trong doc/demo, không coi là “lỗi governance” nếu đã thiết kế cố ý.
 
 ### 5.3 Semantic Kernel — vai trò PoC
 
@@ -182,13 +183,14 @@ Caller truyền `McpCallContext` (`source`, `sagaCorrelationId`, `ticketId`); ch
 |------------|-----|
 | `/ai/chat` | `Kernel` + plugin `Mcp` + auto function calling |
 | Pipeline classify/generate | `IChatCompletionService` + prompt string |
+| Pipeline search | Direct `KnowledgeSearchClient` → `KnowledgeService /search` |
 | Saga orchestration | MassTransit — **không** dùng SK (cố ý demo) |
 
 **Không** yêu cầu PoC: memory, planner, prompt template factory, gộp pipeline vào `Kernel.InvokeAsync`.
 
 ### 5.4 Catalog MCP
 
-`McpDynamicPluginLoader` cache catalog process-wide — **cả chat và pipeline** cần restart (hoặc invalidate sau) khi đổi tool trên MCP server. Pipeline `search_knowledge` fail → catch → `[]` (gợi ý yếu, saga có thể vẫn chạy) — không giả định “saga chết hàng loạt” khi đổi tên tool.
+`McpDynamicPluginLoader` cache catalog process-wide cho Copilot/chat. Pipeline không phụ thuộc catalog MCP; KnowledgeService search fail → catch → `[]` (gợi ý yếu, saga có thể vẫn chạy).
 
 ---
 
@@ -242,8 +244,9 @@ Script từng bước: [`scripts/demo-dual-ai-flow.md`](../scripts/demo-dual-ai-
 | `src/TicketService/Consumers/MarkTicketAnalyzingConsumer.cs` | set active saga, bump epoch |
 | `src/AiOrchestrator/Saga/TicketSuggestionStateMachine.cs` | automation flow |
 | `src/AiOrchestrator/Services/AiPipelineService.cs` | auto suggestion logic |
+| `src/AiOrchestrator/Services/KnowledgeSearchClient.cs` | Direct KnowledgeService search cho pipeline |
 | `src/AiOrchestrator/Services/TicketSuggestionService.cs` | copilot chat |
-| `src/AiOrchestrator/Mcp/McpToolGateway.cs` | MCP calls — audit P0 |
+| `src/AiOrchestrator/Mcp/McpToolGateway.cs` | MCP calls cho Copilot/tool path — audit P0 |
 | `src/AiOrchestrator/Services/McpToolAudit.cs` | audit helper |
 | `src/AiOrchestrator/Mcp/McpToolAccessService.cs` | role → allowed tools (chat) |
 | `src/McpToolServer/Tools/SupportTools.cs` | MCP → Ticket HTTP |
@@ -256,7 +259,8 @@ Script từng bước: [`scripts/demo-dual-ai-flow.md`](../scripts/demo-dual-ai-
 PoC giữ dual flow: Auto Suggestion (saga, service account) và Support Copilot (chat, role policy).
 TicketService owns ticket lifecycle. Agent wins over automation via clear ActiveSagaCorrelationId
 and SagaEpoch++ on lifecycle mutate; stale saga commands must not overwrite.
-MCP mutate goes through TicketService only; audit all MCP calls at McpToolGateway.
+Auto Suggestion search calls KnowledgeService directly; MCP remains for Copilot/tool-calling.
+MCP mutate goes through TicketService only; audit MCP calls at McpToolGateway/filter.
 Do not unify entire pipeline into Semantic Kernel for PoC.
 UI/doc: separate "Auto suggestion" and "Support Copilot".
 P0: lifecycle guard then MCP audit. P1: three demo scenarios. P2: doc/status alignment.

@@ -56,9 +56,13 @@ else
 var mcpClientRegistration = builder.Services.AddHttpClient(McpToolGateway.HttpClientName);
 if (entraEnabled)
     mcpClientRegistration.AddHttpMessageHandler<EntraBearerTokenHandler>();
+var knowledgeClientRegistration = builder.Services.AddHttpClient(KnowledgeSearchClient.HttpClientName);
+if (entraEnabled)
+    knowledgeClientRegistration.AddHttpMessageHandler<EntraBearerTokenHandler>();
 builder.Services.AddSingleton<McpToolGateway>();
 builder.Services.AddSingleton<McpDynamicPluginLoader>();
 builder.Services.AddSingleton<McpToolAccessService>();
+builder.Services.AddSingleton<KnowledgeSearchClient>();
 builder.Services.AddScoped<AiPipelineService>();
 builder.Services.AddScoped<IChatCompletionServiceAccessor>();
 builder.Services.AddScoped<TicketSuggestionService>();

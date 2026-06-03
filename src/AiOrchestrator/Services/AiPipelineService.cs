@@ -2,7 +2,6 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using Microsoft.SemanticKernel.ChatCompletion;
-using SupportPoc.AiOrchestrator.Mcp;
 using SupportPoc.AiOrchestrator.Options;
 using SupportPoc.Shared.Models;
 using SupportPoc.Shared.Testing;
@@ -14,21 +13,18 @@ namespace SupportPoc.AiOrchestrator.Services;
 // Saga state machine se gui Cmd.RunAiPipeline -> RunAiPipelineConsumer goi service nay.
 public sealed class AiPipelineService
 {
-    private readonly McpToolGateway _mcp;
-    private readonly McpDynamicPluginLoader _mcpLoader;
+    private readonly KnowledgeSearchClient _knowledge;
     private readonly IChatCompletionService? _chat;
     private readonly AzureOpenAIOptions _openAiOptions;
     private readonly ILogger<AiPipelineService> _logger;
 
     public AiPipelineService(
-        McpToolGateway mcp,
-        McpDynamicPluginLoader mcpLoader,
+        KnowledgeSearchClient knowledge,
         IChatCompletionServiceAccessor chatAccessor,
         IOptions<AzureOpenAIOptions> openAiOptions,
         ILogger<AiPipelineService> logger)
     {
-        _mcp = mcp;
-        _mcpLoader = mcpLoader;
+        _knowledge = knowledge;
         _chat = chatAccessor.Chat;
         _openAiOptions = openAiOptions.Value;
         _logger = logger;
@@ -46,7 +42,6 @@ public sealed class AiPipelineService
         string? ticketId,
         CancellationToken cancellationToken)
     {
-        var mcpContext = new McpCallContext(McpCallContext.SourcePipeline, sagaCorrelationId, ticketId);
         // FAULT INJECTION: simulate AI failure de verify compensation pattern hoat dong.
         // Consumer se catch va publish IAiPipelineFailed -> saga vao Compensating.
         if (question.Has(FaultInjection.ForceAiFail))
@@ -59,7 +54,7 @@ public sealed class AiPipelineService
         if (string.IsNullOrWhiteSpace(category) || category == SupportCategory.Other)
             category = await ClassifyAsync(question, cancellationToken) ?? SupportCategory.Other;
 
-        var related = await SearchKnowledgeAsync(question, category, mcpContext, cancellationToken);
+        var related = await SearchKnowledgeAsync(question, category, cancellationToken);
         var suggestion = await GenerateAsync(question, related, cancellationToken);
         return new PipelineResult(category, suggestion, related);
     }
@@ -100,30 +95,15 @@ public sealed class AiPipelineService
         }
     }
 
-    public Task<IReadOnlyList<RelatedDocument>> SearchKnowledgeAsync(string query, string? category, CancellationToken cancellationToken)
-        => SearchKnowledgeAsync(query, category, mcpContext: null, cancellationToken);
-
-    public async Task<IReadOnlyList<RelatedDocument>> SearchKnowledgeAsync(
-        string query,
-        string? category,
-        McpCallContext? mcpContext,
-        CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<RelatedDocument>> SearchKnowledgeAsync(string query, string? category, CancellationToken cancellationToken)
     {
         try
         {
-            var catalog = await _mcpLoader.LoadCatalogAsync(cancellationToken);
-            var toolName = catalog.Require("search_knowledge");
-            var args = new Dictionary<string, object?> { ["query"] = query };
-            if (!string.IsNullOrWhiteSpace(category) && category != SupportCategory.Other)
-                args["category"] = category;
-
-            var context = mcpContext ?? new McpCallContext(McpCallContext.SourceSuggestAnswer);
-            var json = await _mcp.CallToolAsync(toolName, args, context, cancellationToken);
-            return McpKnowledgeParser.ParseSearchResults(json);
+            return await _knowledge.SearchAsync(query, category, cancellationToken);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "MCP search_knowledge that bai.");
+            _logger.LogWarning(ex, "KnowledgeService search that bai.");
             return [];
         }
     }

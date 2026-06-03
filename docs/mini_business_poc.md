@@ -98,7 +98,7 @@ Luong tao suggestion duoc xem nhu mot Saga nho do AI Orchestrator dieu phoi:
 1. Nhan `TicketCreated`.
 2. Chuyen ticket sang `Analyzing`.
 3. Phan loai category neu employee de trong hoac chon `Other`.
-4. Search knowledge bang MCP tool `search_knowledge`.
+4. Search knowledge truc tiep qua KnowledgeService `/search`.
 5. Goi LLM tren Azure OpenAI de tao suggestion.
 6. Cap nhat ticket sang `Suggested`.
 7. Neu buoc search/LLM loi, cap nhat ticket sang `NeedsManualReview` hoac giu `Analyzing` kem error reason de agent xu ly tay.
@@ -150,7 +150,7 @@ PoC co the chia thanh cac service nho theo huong Microservices:
   - Lay danh sach category ho tro.
   - Cap nhat trang thai ticket.
 
-MCP giup tach cac cong cu nghiep vu ra khoi logic prompt/orchestrator, de AI Assistant co the goi tool theo interface ro rang.
+MCP giup tach cac cong cu nghiep vu ra khoi logic prompt/orchestrator, de AI Assistant/Copilot co the goi tool theo interface ro rang. Luong Saga auto suggestion khong phu thuoc MCP; pipeline goi KnowledgeService truc tiep cho buoc search co dinh.
 
 ## 7. Event-Driven Architecture
 

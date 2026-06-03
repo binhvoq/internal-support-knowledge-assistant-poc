@@ -215,10 +215,9 @@ app.MapGet("/tickets/mine", async (HttpContext httpContext, TicketDbContext db) 
         return Results.Unauthorized();
 
     var username = httpContext.User.FindFirstValue("preferred_username") ?? httpContext.User.Identity?.Name;
-    var items = await db.Tickets
+    var items = (await db.Tickets
         .Where(t => t.OwnerOid == oid || (t.OwnerOid == null && username != null && t.EmployeeId == username))
-        .OrderByDescending(t => t.CreatedAt)
-        .ToListAsync();
+        .ToListAsync()).OrderByDescending(t => t.CreatedAt).ToList();
     return Results.Ok(items.Select(TicketMapper.ToDto));
 }).WithEntraPolicy(entraEnabled, PolicyNames.EmployeeOrAbove);
 

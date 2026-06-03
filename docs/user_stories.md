@@ -650,8 +650,8 @@ PoC duoc xem la hoan thanh khi co the demo end-to-end:
 2. Knowledge Service index tai lieu vao Azure AI Search voi Vector search.
 3. Employee tao ticket tu React UI.
 4. Ticket Service ghi Outbox va publish event `TicketCreated`.
-5. AI Orchestrator ghi Inbox, chay Saga va dung Semantic Kernel + Azure OpenAI de tao suggestion.
-6. AI Orchestrator dung Azure AI Search de lay related documents.
+5. AI Orchestrator ghi Inbox, chay Saga va dung Azure OpenAI de tao suggestion.
+6. AI Orchestrator goi Knowledge Service de lay related documents; Knowledge Service xu ly Azure AI Search/local fallback.
 7. Support Agent xem ticket, AI suggestion va related documents.
 8. Support Agent resolve ticket voi idempotency.
 9. AI Assistant goi duoc it nhat mot Function Calling.

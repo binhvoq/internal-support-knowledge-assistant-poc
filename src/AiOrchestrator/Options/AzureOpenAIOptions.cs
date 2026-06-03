@@ -8,7 +8,7 @@ public sealed class AzureOpenAIOptions
     public string? ChatEndpoint { get; set; }
     public string? ChatApiKey { get; set; }
     public string ChatDeployment { get; set; } = "gpt-4.1-mini";
-    /// <summary>Neu false: Semantic Kernel chat/pipeline dung MCP fallback (dev khi chat endpoint DNS fail).</summary>
+    /// <summary>Neu false: Semantic Kernel chat dung MCP fallback; pipeline dung direct knowledge search + offline generation.</summary>
     public bool? ChatEnabled { get; set; }
     public string ChatEndpointResolved => ChatEndpoint ?? Endpoint ?? "";
     public string ChatApiKeyResolved => ChatApiKey ?? ApiKey ?? "";
