@@ -71,5 +71,9 @@ public sealed class SaveTicketSuggestionStaleEpochTests
         }
 
         Assert.False(await harness.Published.Any<ITicketSuggestionSaved>());
+        Assert.True(await harness.Published.Any<ITicketSuggestionSaveFailed>(x =>
+            x.Context.Message.CorrelationId == sagaId &&
+            x.Context.Message.TicketId == "TCK-STALE" &&
+            x.Context.Message.Reason.Contains("Stale command", StringComparison.OrdinalIgnoreCase)));
     }
 }

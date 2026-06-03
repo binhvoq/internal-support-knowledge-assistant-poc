@@ -89,6 +89,17 @@ public sealed class CompensateMarkAnalyzingConsumer : IConsumer<ICompensateMarkA
             return;
         }
 
+        if (SagaCommandFeedback.IsSupersededForCompensate(ticket, msg))
+        {
+            _logger.LogInformation(
+                "Compensate noop: ticket superseded by agent or another saga. TicketId={TicketId} Status={Status} activeSaga={Active}",
+                msg.TicketId,
+                ticket.Status,
+                ticket.ActiveSagaCorrelationId);
+            await context.Publish<IMarkAnalyzingReverted>(new MarkAnalyzingReverted(msg.CorrelationId, msg.TicketId));
+            return;
+        }
+
         _logger.LogWarning(
             "Compensate skip: ticket not owned and not in reverted shape — no MarkAnalyzingReverted. TicketId={TicketId} activeSaga={Active} msgSaga={MsgSaga} Status={Status}",
             msg.TicketId,

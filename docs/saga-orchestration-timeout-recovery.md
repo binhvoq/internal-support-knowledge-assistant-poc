@@ -10,6 +10,8 @@ timeout = suspect → GET /internal/tickets/{id}/saga-progress → policy → ou
 
 Event fail ro (`AnalyzingMarkFailed`, `AiPipelineFailed`, `SuggestionSaveFailed`) → compensate ngay, khong probe (`AiPipelineFailed` / `SuggestionSaveFailed` → `Compensating`; `AnalyzingMarkFailed` → `RevertingBeforeFailed`).
 
+TicketService **khong im lang** khi command stale/het han: publish `AnalyzingMarkFailed` / `SuggestionSaveFailed` (reason `Stale command` hoac `Concurrency conflict`) thay vi `return` im lang. Truong hop mark/save da apply nhung event mat → idempotent success (`AnalyzingMarked` / `SuggestionSaved`).
+
 Saga `Failed` (timeout probe het / mark fail): chi vao state nay sau khi ticket da revert ve `OriginalStatus` (thuong `New`), co `SagaStopNote`, da clear lock/draft/suggestion va da tang epoch. Event worker muon → ignore.
 
 | Buoc | Outcome timeout |

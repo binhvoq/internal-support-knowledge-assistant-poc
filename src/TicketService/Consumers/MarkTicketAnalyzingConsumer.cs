@@ -34,11 +34,26 @@ public sealed class MarkTicketAnalyzingConsumer : IConsumer<IMarkTicketAnalyzing
             return;
         }
 
+        if (SagaCommandFeedback.TryGetMarkAlreadyAppliedEpoch(ticket, msg, out var appliedEpoch))
+        {
+            _logger.LogInformation(
+                "MarkAnalyzing idempotent (mark already applied, event lost?) TicketId={TicketId} Epoch={Epoch}",
+                msg.TicketId,
+                appliedEpoch);
+            await context.Publish<ITicketAnalyzingMarked>(new TicketAnalyzingMarked(
+                msg.CorrelationId, msg.TicketId, appliedEpoch));
+            return;
+        }
+
         if (ticket.SagaEpoch != msg.ExpectedEpoch)
         {
             _logger.LogWarning(
                 "Stale MarkTicketAnalyzing TicketId={TicketId} epoch={Epoch} expected={Expected}",
                 msg.TicketId, ticket.SagaEpoch, msg.ExpectedEpoch);
+            await context.Publish<ITicketAnalyzingMarkFailed>(new TicketAnalyzingMarkFailed(
+                msg.CorrelationId,
+                msg.TicketId,
+                SagaCommandFeedback.StaleMarkReason(ticket, msg)));
             return;
         }
 
@@ -89,6 +104,10 @@ public sealed class MarkTicketAnalyzingConsumer : IConsumer<IMarkTicketAnalyzing
         catch (DbUpdateConcurrencyException)
         {
             _logger.LogWarning("MarkAnalyzing concurrency conflict (stale epoch) TicketId={TicketId}", msg.TicketId);
+            await context.Publish<ITicketAnalyzingMarkFailed>(new TicketAnalyzingMarkFailed(
+                msg.CorrelationId,
+                msg.TicketId,
+                SagaCommandFeedback.ConcurrencyConflictReason("MarkTicketAnalyzing")));
             return;
         }
 

@@ -35,20 +35,30 @@ public sealed class SaveTicketSuggestionConsumer : IConsumer<ISaveTicketSuggesti
             return;
         }
 
+        if (SagaCommandFeedback.IsSaveAlreadyApplied(ticket, msg))
+        {
+            _logger.LogInformation(
+                "SaveSuggestion idempotent (already saved, event lost?) TicketId={TicketId}",
+                msg.TicketId);
+            if (ticket.ActiveSagaCorrelationId == msg.CorrelationId)
+            {
+                ticket.ActiveSagaCorrelationId = null;
+                await _db.SaveChangesAsync(context.CancellationToken);
+            }
+
+            await context.Publish<ITicketSuggestionSaved>(new TicketSuggestionSaved(msg.CorrelationId, msg.TicketId));
+            return;
+        }
+
         if (!IsEpochValid(ticket, msg))
         {
             _logger.LogWarning(
                 "Stale SaveTicketSuggestion TicketId={TicketId} epoch={Epoch} expected={Expected} activeSaga={Active}",
                 msg.TicketId, ticket.SagaEpoch, msg.ExpectedEpoch, ticket.ActiveSagaCorrelationId);
-            return;
-        }
-
-        if (ticket.Status == TicketStatus.Suggested && !string.IsNullOrWhiteSpace(ticket.AiSuggestedAnswer))
-        {
-            _logger.LogInformation("Ticket {TicketId} da co Suggestion - bo qua save lap.", msg.TicketId);
-            ticket.ActiveSagaCorrelationId = null;
-            await context.Publish<ITicketSuggestionSaved>(new TicketSuggestionSaved(msg.CorrelationId, msg.TicketId));
-            await _db.SaveChangesAsync(context.CancellationToken);
+            await context.Publish<ITicketSuggestionSaveFailed>(new TicketSuggestionSaveFailed(
+                msg.CorrelationId,
+                msg.TicketId,
+                SagaCommandFeedback.StaleSaveReason(ticket, msg)));
             return;
         }
 
@@ -76,6 +86,10 @@ public sealed class SaveTicketSuggestionConsumer : IConsumer<ISaveTicketSuggesti
             _logger.LogWarning(
                 "SaveSuggestion concurrency conflict (compensate da bump epoch?) TicketId={TicketId}",
                 msg.TicketId);
+            await context.Publish<ITicketSuggestionSaveFailed>(new TicketSuggestionSaveFailed(
+                msg.CorrelationId,
+                msg.TicketId,
+                SagaCommandFeedback.ConcurrencyConflictReason("SaveTicketSuggestion")));
             return;
         }
 

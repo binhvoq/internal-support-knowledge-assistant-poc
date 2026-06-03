@@ -80,4 +80,65 @@ public sealed class CompensateMarkAnalyzingConsumerTests
             await harness.Stop();
         }
     }
+
+    [Fact]
+    public async Task Superseded_resolved_ticket_publishes_reverted_without_mutating()
+    {
+        var sagaId = Guid.Parse("dddddddd-dddd-dddd-dddd-dddddddddddd");
+        var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+
+        await using var provider = new ServiceCollection()
+            .AddSingleton(connection)
+            .AddLogging(b => b.SetMinimumLevel(LogLevel.Warning))
+            .AddDbContext<TicketDbContext>((sp, o) => o.UseSqlite(sp.GetRequiredService<SqliteConnection>()))
+            .AddMassTransitTestHarness(cfg => cfg.AddConsumer<CompensateMarkAnalyzingConsumer>())
+            .BuildServiceProvider(true);
+
+        var updatedAt = DateTimeOffset.UtcNow.AddHours(-1);
+        await using (var scope = provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<TicketDbContext>();
+            await db.Database.EnsureCreatedAsync();
+            db.Tickets.Add(new TicketEntity
+            {
+                Id = "TCK-SUPER",
+                EmployeeId = "EMP-1",
+                Category = SupportCategory.IT,
+                Question = "VPN",
+                Status = TicketStatus.Resolved,
+                FinalAnswer = "Agent resolved",
+                SagaEpoch = 3,
+                ActiveSagaCorrelationId = null,
+                CreatedAt = updatedAt,
+                UpdatedAt = updatedAt
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var harness = provider.GetRequiredService<ITestHarness>();
+        await harness.Start();
+
+        try
+        {
+            await harness.Bus.Publish<ICompensateMarkAnalyzing>(
+                new CompensateMarkAnalyzing(sagaId, "TCK-SUPER", TicketStatus.New));
+
+            Assert.True(await harness.Published.Any<IMarkAnalyzingReverted>(x =>
+                x.Context.Message.CorrelationId == sagaId));
+
+            await using var verifyScope = provider.CreateAsyncScope();
+            var ticket = await verifyScope.ServiceProvider.GetRequiredService<TicketDbContext>()
+                .Tickets.FindAsync("TCK-SUPER");
+            Assert.NotNull(ticket);
+            Assert.Equal(TicketStatus.Resolved, ticket!.Status);
+            Assert.Equal("Agent resolved", ticket.FinalAnswer);
+            Assert.Equal(3, ticket.SagaEpoch);
+            Assert.Equal(updatedAt, ticket.UpdatedAt);
+        }
+        finally
+        {
+            await harness.Stop();
+        }
+    }
 }
