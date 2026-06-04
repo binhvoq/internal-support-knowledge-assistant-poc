@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
@@ -51,6 +52,8 @@ public sealed class TicketSuggestionService
 
         var catalog = await _mcpLoader.LoadCatalogAsync(cancellationToken);
         var allowedFunctions = await _toolAccess.GetAllowedFunctionsAsync(_kernel, roles, cancellationToken);
+        var related = await _pipeline.SearchKnowledgeAsync(message, null, cancellationToken);
+        var knowledgeContext = BuildKnowledgeContext(related);
         var settings = new AzureOpenAIPromptExecutionSettings
         {
             FunctionChoiceBehavior = FunctionChoiceBehavior.Auto(functions: allowedFunctions)
@@ -60,6 +63,9 @@ public sealed class TicketSuggestionService
         history.AddSystemMessage($"""
             Ban la tro ly ho tro noi bo. Chi tra loi dua tren tai lieu tim duoc hoac ket qua MCP tool.
             Neu khong du thong tin, noi ro can support agent xu ly. Khong tu bia chinh sach.
+            Tai lieu noi bo da tim truoc:
+            {knowledgeContext}
+
             Cac MCP tool hien co (tu tools/list):
             {catalog.DescribeForPrompt(allowedFunctions.Select(function => function.Name))}
             Hay chon tool phu hop theo ten va schema tu server.
@@ -76,6 +82,23 @@ public sealed class TicketSuggestionService
             _logger.LogWarning(ex, "Azure OpenAI chat that bai; dung MCP fallback.");
             return await OfflineChatAsync(message, roles, cancellationToken);
         }
+    }
+
+    private static string BuildKnowledgeContext(IReadOnlyList<RelatedDocument> related)
+    {
+        if (related.Count == 0)
+            return "Khong tim thay tai lieu lien quan trong knowledge base.";
+
+        var context = new StringBuilder();
+        foreach (var doc in related)
+        {
+            context.AppendLine($"[DOC {doc.DocumentId}] {doc.Title} (score {doc.Score:F2})");
+            if (!string.IsNullOrWhiteSpace(doc.Content))
+                context.AppendLine(doc.Content.Trim());
+            context.AppendLine();
+        }
+
+        return context.ToString();
     }
 
     public async Task<string> SuggestAnswerAsync(string question, string? category, CancellationToken cancellationToken = default)

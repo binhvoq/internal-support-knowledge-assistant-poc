@@ -35,6 +35,21 @@ public sealed class DocumentBlobStore
         }
     }
 
+    public async Task DeleteAsync(string documentId, CancellationToken cancellationToken = default)
+    {
+        if (!_options.Enabled) return;
+
+        try
+        {
+            var container = await GetContainerAsync(cancellationToken);
+            await container.GetBlobClient($"{documentId}.txt").DeleteIfExistsAsync(cancellationToken: cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Khong xoa duoc blob cho {DocumentId}.", documentId);
+        }
+    }
+
     private async Task<BlobContainerClient> GetContainerAsync(CancellationToken cancellationToken)
     {
         if (_container is not null) return _container;

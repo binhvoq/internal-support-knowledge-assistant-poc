@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using MassTransit;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using SupportPoc.KnowledgeService.Data;
 using SupportPoc.KnowledgeService.Options;
@@ -26,6 +27,7 @@ builder.Services.AddSingleton<ReindexState>();
 builder.Services.AddSingleton<KnowledgeSearchService>();
 builder.Services.AddSingleton<EmbeddingService>();
 builder.Services.AddSingleton<DocumentBlobStore>();
+builder.Services.AddSingleton<PdfKnowledgeExtractor>();
 builder.Services.AddDbContext<KnowledgeDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("Knowledge") ?? "Data Source=knowledge.db"));
 builder.Services.AddCors(options =>
@@ -69,6 +71,7 @@ using (var scope = app.Services.CreateScope())
             CONSTRAINT PK_IdempotencyRecords PRIMARY KEY (Scope, Key)
         );
         """);
+    await EnsureDocumentColumnsAsync(db);
     if (!await db.Documents.AnyAsync())
     {
         db.Documents.AddRange(SeedData.Documents);
@@ -76,10 +79,15 @@ using (var scope = app.Services.CreateScope())
     }
 
     var search = scope.ServiceProvider.GetRequiredService<KnowledgeSearchService>();
+    var embeddings = scope.ServiceProvider.GetRequiredService<EmbeddingService>();
+    var blobStore = scope.ServiceProvider.GetRequiredService<DocumentBlobStore>();
+    var extractor = scope.ServiceProvider.GetRequiredService<PdfKnowledgeExtractor>();
+    var searchOptions = scope.ServiceProvider.GetRequiredService<IOptions<AzureSearchOptions>>();
     var logger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
     try
     {
         await search.EnsureIndexAsync();
+        await SeedDemoPdfAsync(app.Environment, db, extractor, blobStore, search, embeddings, searchOptions.Value, logger);
     }
     catch (Exception ex)
     {
@@ -94,6 +102,11 @@ static KnowledgeDocumentDto ToDto(KnowledgeDocumentEntity e) => new()
     Category = e.Category,
     Content = e.Content,
     SourceUrl = e.SourceUrl,
+    FileName = e.FileName,
+    ContentType = e.ContentType,
+    IngestionStatus = e.IngestionStatus,
+    IngestionMessage = e.IngestionMessage,
+    IngestedAt = e.IngestedAt,
     UpdatedAt = e.UpdatedAt
 };
 
@@ -110,6 +123,9 @@ app.MapPost("/documents", async (
     CreateDocumentRequest request,
     KnowledgeDbContext db,
     DocumentBlobStore blobStore,
+    KnowledgeSearchService search,
+    EmbeddingService embeddings,
+    IOptions<AzureSearchOptions> searchOptions,
     IPublishEndpoint publish,
     CancellationToken cancellationToken) =>
 {
@@ -124,6 +140,8 @@ app.MapPost("/documents", async (
         Category = string.IsNullOrWhiteSpace(request.Category) ? SupportCategory.Other : request.Category,
         Content = request.Content.Trim(),
         SourceUrl = request.SourceUrl,
+        ContentType = "text/plain",
+        IngestionStatus = "Processing",
         UpdatedAt = DateTimeOffset.UtcNow
     };
 
@@ -133,6 +151,7 @@ app.MapPost("/documents", async (
 
     db.Documents.Add(entity);
     await db.SaveChangesAsync();
+    await MarkDocumentReadyAsync(entity, db, search, embeddings, searchOptions.Value, cancellationToken);
     try
     {
         await publish.Publish(new KnowledgeDocumentUploaded(entity.Id), cancellationToken);
@@ -142,6 +161,107 @@ app.MapPost("/documents", async (
         app.Logger.LogWarning(ex, "Publish KnowledgeDocumentUploaded that bai; tiep tuc local flow.");
     }
     return Results.Created($"/documents/{entity.Id}", ToDto(entity));
+}).WithEntraPolicy(entraEnabled, PolicyNames.KnowledgeAdmin);
+
+app.MapPost("/documents/upload-pdf", async (
+    [FromForm] IFormFile file,
+    [FromForm] string? title,
+    [FromForm] string? category,
+    KnowledgeDbContext db,
+    PdfKnowledgeExtractor extractor,
+    DocumentBlobStore blobStore,
+    KnowledgeSearchService search,
+    EmbeddingService embeddings,
+    IOptions<AzureSearchOptions> searchOptions,
+    IPublishEndpoint publish,
+    CancellationToken cancellationToken) =>
+{
+    if (file.Length <= 0)
+        return Results.BadRequest(new { error = "PDF khong duoc de trong." });
+    if (file.Length > 20 * 1024 * 1024)
+        return Results.BadRequest(new { error = "PDF toi da 20 MB cho POC." });
+    if (!file.FileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(file.ContentType, "application/pdf", StringComparison.OrdinalIgnoreCase))
+        return Results.BadRequest(new { error = "Chi ho tro upload file PDF." });
+
+    string content;
+    try
+    {
+        await using var stream = file.OpenReadStream();
+        content = extractor.ExtractText(stream);
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = $"Khong doc duoc PDF: {ex.Message}" });
+    }
+
+    if (string.IsNullOrWhiteSpace(content))
+        return Results.BadRequest(new { error = "PDF khong co text de trich xuat. Neu la PDF scan/image, can them OCR truoc khi RAG." });
+
+    var ids = await db.Documents.Select(d => d.Id).ToListAsync(cancellationToken);
+    var normalizedTitle = string.IsNullOrWhiteSpace(title)
+        ? Path.GetFileNameWithoutExtension(file.FileName)
+        : title.Trim();
+    var entity = new KnowledgeDocumentEntity
+    {
+        Id = DocumentIdGenerator.Next(ids),
+        Title = normalizedTitle,
+        Category = string.IsNullOrWhiteSpace(category) ? SupportCategory.Other : category.Trim(),
+        Content = content,
+        FileName = Path.GetFileName(file.FileName),
+        ContentType = file.ContentType,
+        IngestionStatus = "Processing",
+        IngestionMessage = "Da trich xuat text tu PDF, dang dua vao knowledge index.",
+        UpdatedAt = DateTimeOffset.UtcNow
+    };
+
+    var blobUrl = await blobStore.UploadAsync(entity.Id, entity.Content, cancellationToken);
+    if (blobUrl is not null)
+        entity.SourceUrl = blobUrl;
+
+    db.Documents.Add(entity);
+    await db.SaveChangesAsync(cancellationToken);
+    await MarkDocumentReadyAsync(entity, db, search, embeddings, searchOptions.Value, cancellationToken);
+    try
+    {
+        await publish.Publish(new KnowledgeDocumentUploaded(entity.Id), cancellationToken);
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogWarning(ex, "Publish KnowledgeDocumentUploaded that bai; tiep tuc local flow.");
+    }
+
+    return Results.Created($"/documents/{entity.Id}", ToDto(entity));
+})
+.DisableAntiforgery()
+.WithEntraPolicy(entraEnabled, PolicyNames.KnowledgeAdmin);
+
+app.MapDelete("/documents/{id}", async (
+    string id,
+    KnowledgeDbContext db,
+    DocumentBlobStore blobStore,
+    KnowledgeSearchService search,
+    CancellationToken cancellationToken) =>
+{
+    var entity = await db.Documents.FindAsync([id], cancellationToken);
+    if (entity is null)
+        return Results.NotFound(new { error = $"Document {id} khong ton tai." });
+
+    try
+    {
+        await search.DeleteDocumentAsync(id, cancellationToken);
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogWarning(ex, "Xoa document {DocumentId} khoi Azure AI Search that bai.", id);
+        return Results.Problem(detail: ex.Message, title: $"Xoa document {id} khoi Azure AI Search that bai");
+    }
+
+    await blobStore.DeleteAsync(id, cancellationToken);
+    db.Documents.Remove(entity);
+    await db.SaveChangesAsync(cancellationToken);
+
+    return Results.Ok(new { status = "Deleted", documentId = id });
 }).WithEntraPolicy(entraEnabled, PolicyNames.KnowledgeAdmin);
 
 app.MapGet("/documents/reindex-status", (ReindexState state) => Results.Ok(state.Snapshot()))
@@ -334,6 +454,151 @@ static string HashIdempotency(string scope, string payload)
 {
     var bytes = SHA256.HashData(Encoding.UTF8.GetBytes($"{scope}:{payload}"));
     return Convert.ToHexString(bytes);
+}
+
+static async Task MarkDocumentReadyAsync(
+    KnowledgeDocumentEntity entity,
+    KnowledgeDbContext db,
+    KnowledgeSearchService search,
+    EmbeddingService embeddings,
+    AzureSearchOptions searchOptions,
+    CancellationToken cancellationToken)
+{
+    try
+    {
+        if (searchOptions.Enabled)
+        {
+            await search.EnsureIndexAsync(cancellationToken);
+            var vector = await embeddings.CreateEmbeddingAsync($"{entity.Title}\n{entity.Content}", cancellationToken);
+            await search.UpsertDocumentsAsync([(entity, vector)], cancellationToken);
+            var searchable = await WaitForSearchVisibilityAsync(search, entity.Id, TimeSpan.FromSeconds(15), cancellationToken);
+            if (!searchable)
+                throw new TimeoutException($"Azure AI Search da nhan {entity.Id} nhung chua query duoc sau 15 giay.");
+            entity.IngestionMessage = "AI da doc xong va Azure AI Search da query duoc tai lieu.";
+        }
+        else
+        {
+            entity.IngestionMessage = "AI da doc xong; dang dung local keyword search fallback.";
+        }
+
+        entity.IngestionStatus = "Ready";
+        entity.IngestedAt = DateTimeOffset.UtcNow;
+    }
+    catch (Exception ex)
+    {
+        entity.IngestionStatus = "Failed";
+        entity.IngestionMessage = ex.Message;
+    }
+
+    entity.UpdatedAt = DateTimeOffset.UtcNow;
+    await db.SaveChangesAsync(cancellationToken);
+}
+
+static async Task<bool> WaitForSearchVisibilityAsync(
+    KnowledgeSearchService search,
+    string documentId,
+    TimeSpan timeout,
+    CancellationToken cancellationToken)
+{
+    var deadline = DateTimeOffset.UtcNow + timeout;
+    while (DateTimeOffset.UtcNow < deadline)
+    {
+        if (await search.DocumentExistsAsync(documentId, cancellationToken))
+            return true;
+
+        await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
+    }
+
+    return await search.DocumentExistsAsync(documentId, cancellationToken);
+}
+
+static async Task EnsureDocumentColumnsAsync(KnowledgeDbContext db)
+{
+    var connection = db.Database.GetDbConnection();
+    await connection.OpenAsync();
+    try
+    {
+        var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "PRAGMA table_info(Documents);";
+            await using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+                existing.Add(reader.GetString(1));
+        }
+
+        foreach (var (name, definition) in new[]
+        {
+            ("FileName", "TEXT"),
+            ("ContentType", "TEXT"),
+            ("IngestionStatus", "TEXT NOT NULL DEFAULT 'Ready'"),
+            ("IngestionMessage", "TEXT"),
+            ("IngestedAt", "TEXT")
+        })
+        {
+            if (existing.Contains(name)) continue;
+            await using var alter = connection.CreateCommand();
+            alter.CommandText = $"ALTER TABLE Documents ADD COLUMN {name} {definition};";
+            await alter.ExecuteNonQueryAsync();
+        }
+    }
+    finally
+    {
+        await connection.CloseAsync();
+    }
+}
+
+static async Task SeedDemoPdfAsync(
+    IWebHostEnvironment environment,
+    KnowledgeDbContext db,
+    PdfKnowledgeExtractor extractor,
+    DocumentBlobStore blobStore,
+    KnowledgeSearchService search,
+    EmbeddingService embeddings,
+    AzureSearchOptions searchOptions,
+    ILogger logger)
+{
+    const string fileName = "device-replacement-policy.pdf";
+    var pdfPath = Path.GetFullPath(Path.Combine(environment.ContentRootPath, "..", "..", "test-pdfs", fileName));
+    if (!File.Exists(pdfPath))
+        return;
+
+    if (await db.Documents.AnyAsync(d => d.FileName == fileName || d.Title == "Device Replacement Policy Demo Seed"))
+        return;
+
+    string content;
+    await using (var stream = File.OpenRead(pdfPath))
+    {
+        content = extractor.ExtractText(stream);
+    }
+    if (string.IsNullOrWhiteSpace(content))
+    {
+        logger.LogWarning("Demo PDF seed {Path} khong co text de ingest.", pdfPath);
+        return;
+    }
+
+    var ids = await db.Documents.Select(d => d.Id).ToListAsync();
+    var entity = new KnowledgeDocumentEntity
+    {
+        Id = DocumentIdGenerator.Next(ids),
+        Title = "Device Replacement Policy Demo Seed",
+        Category = SupportCategory.IT,
+        Content = content,
+        FileName = fileName,
+        ContentType = "application/pdf",
+        IngestionStatus = "Processing",
+        IngestionMessage = "Demo seed PDF dang duoc dua vao knowledge index.",
+        UpdatedAt = DateTimeOffset.UtcNow
+    };
+
+    var blobUrl = await blobStore.UploadAsync(entity.Id, entity.Content);
+    if (blobUrl is not null)
+        entity.SourceUrl = blobUrl;
+
+    db.Documents.Add(entity);
+    await db.SaveChangesAsync();
+    await MarkDocumentReadyAsync(entity, db, search, embeddings, searchOptions, CancellationToken.None);
+    logger.LogInformation("Da auto-seed demo PDF {FileName} thanh {DocumentId}.", fileName, entity.Id);
 }
 
 public sealed record CreateDocumentRequest(string Title, string Category, string Content, string? SourceUrl);

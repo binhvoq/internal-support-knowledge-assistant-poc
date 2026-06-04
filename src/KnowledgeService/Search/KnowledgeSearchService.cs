@@ -75,6 +75,30 @@ public sealed class KnowledgeSearchService
         await client.MergeOrUploadDocumentsAsync(batch, cancellationToken: cancellationToken);
     }
 
+    public async Task DeleteDocumentAsync(string documentId, CancellationToken cancellationToken = default)
+    {
+        if (!_options.Enabled) return;
+
+        var client = CreateSearchClient();
+        await client.DeleteDocumentsAsync("documentId", [documentId], cancellationToken: cancellationToken);
+    }
+
+    public async Task<bool> DocumentExistsAsync(string documentId, CancellationToken cancellationToken = default)
+    {
+        if (!_options.Enabled) return true;
+
+        var client = CreateSearchClient();
+        try
+        {
+            var response = await client.GetDocumentAsync<KnowledgeSearchHit>(documentId, cancellationToken: cancellationToken);
+            return string.Equals(response.Value.DocumentId, documentId, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404)
+        {
+            return false;
+        }
+    }
+
     public async Task<IReadOnlyList<RelatedDocument>> SearchAsync(string query, string? category, int top = 5, CancellationToken cancellationToken = default)
     {
         if (!_options.Enabled)

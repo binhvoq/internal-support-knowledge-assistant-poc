@@ -382,6 +382,7 @@ function DetailView({ ticketId, onBack }: { ticketId: string; onBack: () => void
   };
 
   const saveAnswer = async () => {
+    if (!ticket) return;
     const answer = finalAnswerRef.current?.value ?? finalAnswer;
     const updated = await api.patchTicket(ticketId, { status: ticket.status, finalAnswer: answer });
     setTicket(updated);
@@ -453,6 +454,8 @@ function DetailView({ ticketId, onBack }: { ticketId: string; onBack: () => void
 
 function KnowledgeView() {
   const [docs, setDocs] = useState<KnowledgeDocument[]>([]);
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [pdfTitle, setPdfTitle] = useState('');
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('IT');
   const [content, setContent] = useState('');
@@ -460,6 +463,10 @@ function KnowledgeView() {
   const [reindexStatus, setReindexStatus] = useState('Idle');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [uploading, setUploading] = useState(false);
+
+  const readyCount = docs.filter((d) => d.ingestionStatus === 'Ready').length;
+  const failedCount = docs.filter((d) => d.ingestionStatus === 'Failed').length;
 
   const load = async () => {
     setDocs(await api.listDocuments());
@@ -502,6 +509,35 @@ function KnowledgeView() {
     }
   };
 
+  const uploadPdf = async () => {
+    setError('');
+    setMessage('');
+    if (!pdfFile) {
+      setError('Chon mot file PDF truoc khi upload.');
+      return;
+    }
+    try {
+      setUploading(true);
+      const doc = await api.uploadPdfDocument({
+        file: pdfFile,
+        title: pdfTitle.trim() || undefined,
+        category,
+      });
+      setPdfFile(null);
+      setPdfTitle('');
+      setMessage(
+        doc.ingestionStatus === 'Ready'
+          ? `${doc.title} da duoc AI doc xong va san sang tu van.`
+          : `${doc.title} da upload nhung ingestion status la ${doc.ingestionStatus}.`
+      );
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const reindex = async () => {
     setError('');
     setMessage('Dang re-index...');
@@ -515,15 +551,69 @@ function KnowledgeView() {
     }
   };
 
+  const deleteDoc = async (doc: KnowledgeDocument) => {
+    setError('');
+    setMessage('');
+    const ok = window.confirm(`Xoa ${doc.title} khoi DB, blob va Azure AI Search?`);
+    if (!ok) return;
+    try {
+      await api.deleteDocument(doc.id);
+      setMessage(`Da xoa ${doc.title}.`);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
   return (
     <div className="card">
       <h2>Knowledge Admin</h2>
       <AuthRequiredBanner action="quan ly tai lieu (can role Support.KnowledgeAdmin)" />
-      <p>
-        Re-index status: <strong>{reindexStatus}</strong>
-      </p>
+      <div className="knowledge-summary">
+        <div>
+          <strong>{readyCount}</strong>
+          <span>Ready</span>
+        </div>
+        <div>
+          <strong>{docs.length}</strong>
+          <span>Total docs</span>
+        </div>
+        <div>
+          <strong>{failedCount}</strong>
+          <span>Failed</span>
+        </div>
+        <div>
+          <strong>{reindexStatus}</strong>
+          <span>Index status</span>
+        </div>
+      </div>
       {message && <p className="success">{message}</p>}
       {error && <p className="error">{error}</p>}
+      <h3>Upload policy PDF</h3>
+      <label>PDF file</label>
+      <input
+        type="file"
+        accept="application/pdf,.pdf"
+        onChange={(e) => {
+          setPdfFile(e.target.files?.[0] ?? null);
+          if (error) setError('');
+        }}
+      />
+      <label>Display title (tuy chon)</label>
+      <input
+        value={pdfTitle}
+        onChange={(e) => setPdfTitle(e.target.value)}
+        placeholder={pdfFile ? pdfFile.name.replace(/\.pdf$/i, '') : 'Policy name'}
+      />
+      <div className="actions">
+        <button className="primary" onClick={uploadPdf} disabled={uploading}>
+          {uploading ? 'Dang doc PDF...' : 'Upload PDF'}
+        </button>
+        <button className="secondary" onClick={reindex}>
+          Re-index all
+        </button>
+      </div>
+      <h3>Them text knowledge thu cong</h3>
       <label>Title</label>
       <input
         value={title}
@@ -556,25 +646,39 @@ function KnowledgeView() {
         <button className="primary" onClick={addDoc}>
           Them tai lieu
         </button>
-        <button className="secondary" onClick={reindex}>
-          Re-index
-        </button>
       </div>
-      <h3>Danh sach tai lieu</h3>
-      <ul className="related">
+      <h3>File AI da doc</h3>
+      <ul className="knowledge-list">
         {docs.map((d) => (
           <li key={d.id}>
-            <strong>{d.id}</strong> — {d.title} ({d.category})
-            {d.sourceUrl && (
-              <>
-                {' '}
+            <div className="knowledge-row-main">
+              <div>
+                <strong>{d.title}</strong>
                 <small>
-                  <a href={d.sourceUrl} target="_blank" rel="noreferrer">
-                    source
-                  </a>
+                  {d.id} | {d.category}
+                  {d.fileName ? ` | ${d.fileName}` : ''}
                 </small>
-              </>
-            )}
+              </div>
+              <div className="knowledge-row-actions">
+                <span className={`badge status-${d.ingestionStatus.toLowerCase()}`}>
+                  {d.ingestionStatus === 'Ready' ? 'San sang tu van' : d.ingestionStatus}
+                </span>
+                <button className="secondary danger" onClick={() => deleteDoc(d)}>
+                  Xoa
+                </button>
+              </div>
+            </div>
+            <p>{d.ingestionMessage || 'Tai lieu seed/manual da san sang trong knowledge base.'}</p>
+            <small>
+              Updated {new Date(d.updatedAt).toLocaleString()}
+              {d.ingestedAt ? ` | Digested ${new Date(d.ingestedAt).toLocaleString()}` : ''}
+              {d.sourceUrl ? ' | ' : ''}
+              {d.sourceUrl && (
+                <a href={d.sourceUrl} target="_blank" rel="noreferrer">
+                  source
+                </a>
+              )}
+            </small>
           </li>
         ))}
       </ul>

@@ -15,6 +15,9 @@ public sealed class KnowledgeDbContext(DbContextOptions<KnowledgeDbContext> opti
             entity.Property(x => x.Id).HasMaxLength(32);
             entity.Property(x => x.Title).HasMaxLength(256);
             entity.Property(x => x.Category).HasMaxLength(32);
+            entity.Property(x => x.FileName).HasMaxLength(256);
+            entity.Property(x => x.ContentType).HasMaxLength(128);
+            entity.Property(x => x.IngestionStatus).HasMaxLength(32);
         });
 
         modelBuilder.Entity<IdempotencyRecordEntity>(entity =>

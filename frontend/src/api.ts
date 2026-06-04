@@ -24,6 +24,11 @@ export type KnowledgeDocument = {
   category: string;
   content: string;
   sourceUrl?: string;
+  fileName?: string;
+  contentType?: string;
+  ingestionStatus: string;
+  ingestionMessage?: string;
+  ingestedAt?: string;
   updatedAt: string;
 };
 
@@ -35,7 +40,8 @@ export function setAccessTokenProvider(fn: () => Promise<string | null>) {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const isFormData = init?.body instanceof FormData;
+  const headers: Record<string, string> = isFormData ? {} : { 'Content-Type': 'application/json' };
   if (init?.headers) {
     const h = init.headers as Record<string, string>;
     Object.assign(headers, h);
@@ -94,6 +100,15 @@ export const api = {
   listDocuments: () => request<KnowledgeDocument[]>(`${knowledgeBase}/documents`),
   createDocument: (body: { title: string; category: string; content: string; sourceUrl?: string }) =>
     request<KnowledgeDocument>(`${knowledgeBase}/documents`, { method: 'POST', body: JSON.stringify(body) }),
+  uploadPdfDocument: (body: { file: File; title?: string; category?: string }) => {
+    const form = new FormData();
+    form.append('file', body.file);
+    if (body.title) form.append('title', body.title);
+    if (body.category) form.append('category', body.category);
+    return request<KnowledgeDocument>(`${knowledgeBase}/documents/upload-pdf`, { method: 'POST', body: form });
+  },
+  deleteDocument: (id: string) =>
+    request<{ status: string; documentId: string }>(`${knowledgeBase}/documents/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   reindex: () => request<{ status: string; documentCount: number }>(`${knowledgeBase}/documents/reindex`, { method: 'POST' }),
   reindexStatus: () => request<{ status: string; lastError?: string }>(`${knowledgeBase}/documents/reindex-status`),
   chat: (message: string) => request<{ reply: string }>(`${aiBase}/ai/chat`, { method: 'POST', body: JSON.stringify({ message }) }),

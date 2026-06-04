@@ -9,6 +9,7 @@ node_modules/
 dist/
 .logs/
 logs/
+test-pdfs/
 .env.local
 config/azure.local.json
 config/azure.resources.state.json
