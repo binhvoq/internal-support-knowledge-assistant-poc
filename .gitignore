@@ -3,6 +3,7 @@ obj/
 *.db
 *.db-shm
 *.db-wal
+*.db.bak-*
 *.tmp
 node_modules/
 dist/

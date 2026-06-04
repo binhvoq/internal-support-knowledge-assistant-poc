@@ -3,10 +3,7 @@ using SupportPoc.TicketService.Data;
 
 namespace SupportPoc.TicketService.Services;
 
-/// <summary>
-/// Mutate ticket lifecycle status (agent action). Applies saga ownership override when automation is active.
-/// PoC: any valid TicketStatus is allowed — no transition matrix (production should add one).
-/// </summary>
+/// <summary>Mutate ticket lifecycle (agent). Khong can saga ownership — proposal model dung invariant.</summary>
 public static class TicketLifecycleMutation
 {
     public static bool TryMutateStatus(
@@ -27,8 +24,6 @@ public static class TicketLifecycleMutation
             error = "finalAnswer la bat buoc khi chuyen sang Resolved.";
             return false;
         }
-
-        TicketSagaOwnership.ApplyAgentLifecycleOverride(ticket);
 
         ticket.Status = status;
         if (status == TicketStatus.Resolved)

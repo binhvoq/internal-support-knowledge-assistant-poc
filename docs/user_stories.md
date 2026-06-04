@@ -1,5 +1,7 @@
 # User Stories: Internal Support Knowledge Assistant
 
+> **Luu y (2026-06):** Auto suggestion da chuyen sang proposal pipeline — ticket **New → Suggested** (khong con `Analyzing` / `SagaEpoch`). Chi tiet: [`auto-suggestion-proposal.md`](auto-suggestion-proposal.md). Cac story saga ben duoi co the con wording cu.
+
 ## 1. Muc dich tai lieu
 
 Tai lieu nay chuyen y tuong trong `mini_business_poc.md` thanh cac user story co the dung de lap ke hoach va giao viec cho AI/coder khi implement PoC.

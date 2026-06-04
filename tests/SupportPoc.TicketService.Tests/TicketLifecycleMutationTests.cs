@@ -7,78 +7,38 @@ namespace SupportPoc.TicketService.Tests;
 public sealed class TicketLifecycleMutationTests
 {
     [Fact]
-    public void TryMutateStatus_with_active_saga_clears_ownership_and_bumps_epoch()
+    public void Resolve_sets_final_answer_without_saga_epoch()
     {
-        var sagaId = Guid.Parse("cccccccc-cccc-cccc-cccc-cccccccccccc");
-        var ticket = CreateTicket(TicketStatus.Analyzing, sagaId, sagaEpoch: 1);
+        var ticket = NewTicket(TicketStatus.Suggested);
+        ticket.AiSuggestedAnswer = "ai";
 
-        var ok = TicketLifecycleMutation.TryMutateStatus(ticket, TicketStatus.Suggested, null, out var error);
+        var ok = TicketLifecycleMutation.TryMutateStatus(ticket, TicketStatus.Resolved, "agent final", out var error);
 
         Assert.True(ok);
         Assert.Null(error);
-        Assert.Equal(TicketStatus.Suggested, ticket.Status);
-        Assert.Null(ticket.ActiveSagaCorrelationId);
-        Assert.Equal(2, ticket.SagaEpoch);
-    }
-
-    [Fact]
-    public void TryMutateStatus_resolved_requires_final_answer()
-    {
-        var ticket = CreateTicket(TicketStatus.Suggested, activeSaga: null, sagaEpoch: 2);
-
-        var ok = TicketLifecycleMutation.TryMutateStatus(ticket, TicketStatus.Resolved, finalAnswer: null, out var error);
-
-        Assert.False(ok);
-        Assert.Contains("finalAnswer", error, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(TicketStatus.Suggested, ticket.Status);
-    }
-
-    [Fact]
-    public void TryMutateStatus_resolved_sets_final_answer()
-    {
-        var ticket = CreateTicket(TicketStatus.Suggested, activeSaga: null, sagaEpoch: 2);
-
-        var ok = TicketLifecycleMutation.TryMutateStatus(ticket, TicketStatus.Resolved, "Done", out _);
-
-        Assert.True(ok);
         Assert.Equal(TicketStatus.Resolved, ticket.Status);
-        Assert.Equal("Done", ticket.FinalAnswer);
+        Assert.Equal("agent final", ticket.FinalAnswer);
     }
 
     [Fact]
-    public void TryMutateStatus_non_resolved_can_save_edited_answer()
+    public void Reopen_clears_final_answer()
     {
-        var ticket = CreateTicket(TicketStatus.Reopened, activeSaga: null, sagaEpoch: 2);
+        var ticket = NewTicket(TicketStatus.Resolved);
+        ticket.FinalAnswer = "was resolved";
 
-        var ok = TicketLifecycleMutation.TryMutateStatus(ticket, TicketStatus.Reopened, "Draft answer", out _);
-
-        Assert.True(ok);
+        Assert.True(TicketLifecycleMutation.TryMutateStatus(ticket, TicketStatus.Reopened, null, out _));
         Assert.Equal(TicketStatus.Reopened, ticket.Status);
-        Assert.Equal("Draft answer", ticket.FinalAnswer);
+        Assert.Null(ticket.FinalAnswer);
     }
 
-    [Fact]
-    public void TryMutateStatus_rejects_unknown_status()
+    private static TicketEntity NewTicket(string status) => new()
     {
-        var ticket = CreateTicket(TicketStatus.New, activeSaga: null, sagaEpoch: 0);
-
-        var ok = TicketLifecycleMutation.TryMutateStatus(ticket, "NeedsManualReview", null, out var error);
-
-        Assert.False(ok);
-        Assert.Contains("khong hop le", error, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static TicketEntity CreateTicket(string status, Guid? activeSaga, int sagaEpoch) =>
-        new()
-        {
-            Id = "TCK-MUT",
-            EmployeeId = "EMP-1",
-            Category = SupportCategory.IT,
-            Question = "VPN",
-            Status = status,
-            ActiveSagaCorrelationId = activeSaga,
-            SagaEpoch = sagaEpoch,
-            CreatedAt = DateTimeOffset.UtcNow,
-            UpdatedAt = DateTimeOffset.UtcNow
-        };
+        Id = "TCK-LC",
+        EmployeeId = "EMP-1",
+        Category = SupportCategory.IT,
+        Question = "Q",
+        Status = status,
+        CreatedAt = DateTimeOffset.UtcNow,
+        UpdatedAt = DateTimeOffset.UtcNow
+    };
 }

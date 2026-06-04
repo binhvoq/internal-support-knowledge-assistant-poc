@@ -8,7 +8,7 @@ internal static class TicketMapper
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    public static TicketDto ToDto(TicketEntity entity) => new()
+    public static TicketDto ToDto(TicketEntity entity, bool autoSuggestionNotifyFailed = false) => new()
     {
         Id = entity.Id,
         EmployeeId = entity.EmployeeId,
@@ -17,9 +17,9 @@ internal static class TicketMapper
         Status = entity.Status,
         AiSuggestedAnswer = entity.AiSuggestedAnswer,
         FinalAnswer = entity.FinalAnswer,
-        SagaStopNote = entity.SagaStopNote,
         RelatedDocuments = JsonSerializer.Deserialize<List<RelatedDocument>>(entity.RelatedDocumentsJson, JsonOptions) ?? [],
         CreatedAt = entity.CreatedAt,
-        UpdatedAt = entity.UpdatedAt
+        UpdatedAt = entity.UpdatedAt,
+        AutoSuggestionNotifyFailed = autoSuggestionNotifyFailed
     };
 }

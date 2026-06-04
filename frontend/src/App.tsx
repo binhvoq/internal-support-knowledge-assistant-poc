@@ -9,7 +9,25 @@ import { apiScope } from './auth/msalConfig';
 type View = 'employee' | 'queue' | 'detail' | 'knowledge' | 'chat' | 'auth';
 
 const categories = ['IT', 'HR', 'Finance', 'Other'];
-const statuses = ['New', 'Analyzing', 'Suggested', 'Resolved', 'Reopened'];
+/** Ticket lifecycle (proposal pipeline — khong con Analyzing cho ticket moi). */
+const statuses = ['New', 'Suggested', 'Resolved', 'Reopened'];
+/** Chi filter queue — ticket cu co the con Analyzing. */
+const legacyStatuses = ['Analyzing'];
+
+function autoSuggestionStatusText(status: string | null): string {
+  switch (status) {
+    case 'Running':
+      return 'Dang tao goi y tu dong...';
+    case 'Produced':
+      return 'Dang ap dung goi y len ticket...';
+    case 'Failed':
+      return 'Tao goi y that bai — agent co the xu ly thu cong.';
+    case 'Discarded':
+      return 'Goi y khong duoc ap dung (ticket da thay doi hoac da resolve).';
+    default:
+      return 'Chua co goi y so bo.';
+  }
+}
 
 function App() {
   const [view, setView] = useState<View>('auth');
@@ -161,8 +179,11 @@ function EmployeeView() {
         </button>
       </div>
       {created && (
-        <div className="success">
-          Da tao {created.id} — status: {created.status}. Auto suggestion se duoc tao trong giay lat.
+        <div className={created.autoSuggestionNotifyFailed ? 'error' : 'success'}>
+          Da tao {created.id} — status: {created.status}.
+          {created.autoSuggestionNotifyFailed
+            ? ' Canh bao: ticket da luu nhung pipeline auto-suggestion chua duoc kich hoat — thu restart services hoac lien he support.'
+            : ' Auto suggestion se duoc tao trong giay lat.'}
         </div>
       )}
       {myTickets.length > 0 && (
@@ -221,6 +242,11 @@ function QueueView({ onSelect }: { onSelect: (id: string) => void }) {
             <option value="">All</option>
             {statuses.map((s) => (
               <option key={s}>{s}</option>
+            ))}
+            {legacyStatuses.map((s) => (
+              <option key={s} value={s}>
+                {s} (legacy)
+              </option>
             ))}
           </select>
         </div>
@@ -287,6 +313,7 @@ function QueueView({ onSelect }: { onSelect: (id: string) => void }) {
 
 function DetailView({ ticketId, onBack }: { ticketId: string; onBack: () => void }) {
   const [ticket, setTicket] = useState<Ticket | null>(null);
+  const [autoJobStatus, setAutoJobStatus] = useState<string | null>(null);
   const [finalAnswer, setFinalAnswer] = useState('');
   const [error, setError] = useState('');
   const finalAnswerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -309,16 +336,27 @@ function DetailView({ ticketId, onBack }: { ticketId: string; onBack: () => void
       setTicket(t);
       setFinalAnswer(t.finalAnswer ?? t.aiSuggestedAnswer ?? '');
       finalAnswerDirtyRef.current = false;
+      if (!t.aiSuggestedAnswer && t.status === 'New') {
+        const job = await api.getAutoSuggestionJob(ticketId);
+        if (!cancelled) setAutoJobStatus(job?.status ?? null);
+      }
     };
     run();
     const t = setInterval(() => {
-      void api.getTicket(ticketId).then((data) => {
+      void (async () => {
+        const data = await api.getTicket(ticketId);
         if (cancelled) return;
         setTicket(data);
         if (!finalAnswerDirtyRef.current) {
           setFinalAnswer(data.finalAnswer ?? data.aiSuggestedAnswer ?? '');
         }
-      });
+        if (!data.aiSuggestedAnswer && data.status === 'New') {
+          const job = await api.getAutoSuggestionJob(ticketId);
+          if (!cancelled) setAutoJobStatus(job?.status ?? null);
+        } else if (!cancelled) {
+          setAutoJobStatus(null);
+        }
+      })();
     }, 4000);
     return () => {
       cancelled = true;
@@ -372,7 +410,7 @@ function DetailView({ ticketId, onBack }: { ticketId: string; onBack: () => void
       </p>
       <h3>Auto suggestion (gợi ý sơ bộ)</h3>
       {!ticket.aiSuggestedAnswer ? (
-        <p>{ticket.status === 'Analyzing' ? 'Dang tao goi y tu dong...' : 'Chua co goi y so bo.'}</p>
+        <p>{autoSuggestionStatusText(autoJobStatus)}</p>
       ) : (
         <p>{ticket.aiSuggestedAnswer}</p>
       )}

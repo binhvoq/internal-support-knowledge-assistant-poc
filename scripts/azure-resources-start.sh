@@ -11,7 +11,7 @@ CONFIG_FILE="${CONFIG_FILE:-$ROOT/config/azure.local.json}"
 load_saved_names() {
   local python_bin=python3
   command -v python3 >/dev/null 2>&1 || python_bin=python
-  "$python_bin" "$STATE_FILE" "$CONFIG_FILE" <<'PY'
+  "$python_bin" - "$STATE_FILE" "$CONFIG_FILE" <<'PY'
 import json
 import os
 import re

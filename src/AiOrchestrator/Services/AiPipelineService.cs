@@ -8,9 +8,7 @@ using SupportPoc.Shared.Testing;
 
 namespace SupportPoc.AiOrchestrator.Services;
 
-// Gop logic AI cu (Classify + Search + Generate) lai mot cho.
-// Khong con coupling voi Saga state, khong con goi TicketApi.
-// Saga state machine se gui Cmd.RunAiPipeline -> RunAiPipelineConsumer goi service nay.
+// Classify + Search + Generate — chi dung trong proposal pipeline (TicketCreatedConsumer).
 public sealed class AiPipelineService
 {
     private readonly KnowledgeSearchClient _knowledge;
@@ -32,18 +30,11 @@ public sealed class AiPipelineService
 
     public sealed record PipelineResult(string Category, string Suggestion, IReadOnlyList<RelatedDocument> Related);
 
-    public Task<PipelineResult> RunAsync(string question, string requestedCategory, CancellationToken cancellationToken)
-        => RunAsync(question, requestedCategory, sagaCorrelationId: null, ticketId: null, cancellationToken);
-
     public async Task<PipelineResult> RunAsync(
         string question,
         string requestedCategory,
-        Guid? sagaCorrelationId,
-        string? ticketId,
         CancellationToken cancellationToken)
     {
-        // FAULT INJECTION: simulate AI failure de verify compensation pattern hoat dong.
-        // Consumer se catch va publish IAiPipelineFailed -> saga vao Compensating.
         if (question.Has(FaultInjection.ForceAiFail))
         {
             _logger.LogWarning("FaultInjection: ForceAiFail marker detected -> throwing simulated AI failure.");

@@ -2,12 +2,12 @@
 
 Tài liệu này chốt **ý tưởng thiết kế** và **đặc tả hành vi** cho Support PoC khi có đồng thời:
 
-- **Auto Suggestion** — automation nền (saga / pipeline sau `TicketCreated`)
+- **Auto Suggestion** — automation nền (proposal pipeline sau `TicketCreated`, xem [`auto-suggestion-proposal.md`](auto-suggestion-proposal.md))
 - **Support Copilot** — chat tương tác theo role người dùng
 
 **North star:** Hai flow được phép khác nhau về cách suy luận và công cụ, nhưng **cùng chạm aggregate `Ticket`** thì **TicketService** phải có **luật tranh quyền** rõ ràng. Không tranh “có nên tồn tại song song không”; câu hỏi chuẩn là: *khi automation và agent cùng muốn đổi ticket, ai thắng và hệ thống xử lý thế nào?*
 
-**Liên quan:** [`mini_business_poc.md`](mini_business_poc.md), [`zero-trust-identity.md`](zero-trust-identity.md), [`saga-orchestration-timeout-recovery.md`](saga-orchestration-timeout-recovery.md).
+**Liên quan:** [`mini_business_poc.md`](mini_business_poc.md), [`zero-trust-identity.md`](zero-trust-identity.md), [`auto-suggestion-proposal.md`](auto-suggestion-proposal.md). (Saga cũ: [`saga-orchestration-timeout-recovery.md`](saga-orchestration-timeout-recovery.md) — deprecated.)
 
 ---
 

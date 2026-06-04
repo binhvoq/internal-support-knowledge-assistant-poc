@@ -14,6 +14,8 @@ export type Ticket = {
   createdAt: string;
   updatedAt: string;
   hasAiSuggestion: boolean;
+  /** Chi POST /tickets — true khi ticket da luu nhung dev bridge notify that bai */
+  autoSuggestionNotifyFailed?: boolean;
 };
 
 export type KnowledgeDocument = {
@@ -95,4 +97,8 @@ export const api = {
   reindex: () => request<{ status: string; documentCount: number }>(`${knowledgeBase}/documents/reindex`, { method: 'POST' }),
   reindexStatus: () => request<{ status: string; lastError?: string }>(`${knowledgeBase}/documents/reindex-status`),
   chat: (message: string) => request<{ reply: string }>(`${aiBase}/ai/chat`, { method: 'POST', body: JSON.stringify({ message }) }),
+  getAutoSuggestionJob: (ticketId: string) =>
+    request<{ jobId: string; ticketId: string; status: string; failureReason?: string; discardReason?: string }>(
+      `${aiBase}/tickets/${encodeURIComponent(ticketId)}/auto-suggestion`
+    ).catch(() => null),
 };

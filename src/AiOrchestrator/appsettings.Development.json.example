@@ -5,27 +5,21 @@
       "Microsoft.AspNetCore": "Warning"
     }
   },
-  "AllowedHosts": "*",
-  "ConnectionStrings": {
-    "Tickets": "Data Source=tickets.db"
-  },
   "ServiceBus": {
     "ConnectionString": "",
     "TopicName": "support-events"
   },
   "LocalMessaging": {
-    "HttpBridgeEnabled": false,
+    "HttpBridgeEnabled": true,
     "TicketServiceBaseUrl": "http://localhost:5001",
     "AiOrchestratorBaseUrl": "http://localhost:5003"
   },
-  "Services": {
-    "AiOrchestrator": "http://localhost:5003"
+  "AzureOpenAI": {
+    "Endpoint": "",
+    "ApiKey": "",
+    "ChatEnabled": false
   },
   "AzureAd": {
-    "Enabled": false,
-    "Instance": "https://login.microsoftonline.com/",
-    "TenantId": "",
-    "ClientId": "",
-    "Audience": ""
+    "Enabled": false
   }
 }

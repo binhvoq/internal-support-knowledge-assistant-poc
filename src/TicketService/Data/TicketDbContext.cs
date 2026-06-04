@@ -6,12 +6,10 @@ namespace SupportPoc.TicketService.Data;
 public sealed class TicketDbContext(DbContextOptions<TicketDbContext> options) : DbContext(options)
 {
     public DbSet<TicketEntity> Tickets => Set<TicketEntity>();
-    // Idempotency cap HTTP - khac voi message inbox (do MassTransit quan ly).
     public DbSet<IdempotencyRecordEntity> IdempotencyRecords => Set<IdempotencyRecordEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        // 3 bang cua MassTransit: Inbox/Outbox/OutboxState.
         modelBuilder.AddInboxStateEntity();
         modelBuilder.AddOutboxMessageEntity();
         modelBuilder.AddOutboxStateEntity();
@@ -24,7 +22,6 @@ public sealed class TicketDbContext(DbContextOptions<TicketDbContext> options) :
             entity.Property(x => x.OwnerOid).HasMaxLength(64);
             entity.Property(x => x.Category).HasMaxLength(32);
             entity.Property(x => x.Status).HasMaxLength(32);
-            entity.Property(x => x.SagaEpoch).HasDefaultValue(0).IsConcurrencyToken();
         });
 
         modelBuilder.Entity<IdempotencyRecordEntity>(entity =>

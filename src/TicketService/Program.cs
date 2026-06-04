@@ -18,20 +18,22 @@ if (entraEnabled)
     builder.Services.AddSupportPocEntraAuth(builder.Configuration);
 
 builder.Services.Configure<ServiceBusOptions>(builder.Configuration.GetSection(ServiceBusOptions.SectionName));
+builder.Services.Configure<LocalMessagingOptions>(builder.Configuration.GetSection(LocalMessagingOptions.SectionName));
 builder.Services.AddDbContext<TicketDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("Tickets") ?? "Data Source=tickets.db"));
+builder.Services.AddHttpClient(OrchestratorDevBridge.HttpClientName);
+builder.Services.AddScoped<ConsiderAutoSuggestionApplier>();
+builder.Services.AddScoped<OrchestratorDevBridge>();
 builder.Services.AddCors(options =>
     options.AddDefaultPolicy(p => p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
 
 // ---------- MassTransit ----------
 var serviceBus = builder.Configuration.GetSection(ServiceBusOptions.SectionName).Get<ServiceBusOptions>() ?? new ServiceBusOptions();
+var localMessaging = builder.Configuration.GetSection(LocalMessagingOptions.SectionName).Get<LocalMessagingOptions>() ?? new LocalMessagingOptions();
 
 builder.Services.AddMassTransit(mt =>
 {
-    mt.AddConsumer<MarkTicketAnalyzingConsumer, MarkTicketAnalyzingConsumerDefinition>();
-    mt.AddConsumer<SaveTicketSuggestionConsumer, SaveTicketSuggestionConsumerDefinition>();
-    mt.AddConsumer<CompensateMarkAnalyzingConsumer, CompensateMarkAnalyzingConsumerDefinition>();
-    mt.AddConsumer<RecordAiPipelineDraftConsumer, RecordAiPipelineDraftConsumerDefinition>();
+    mt.AddConsumer<ConsiderAutoSuggestionConsumer, ConsiderAutoSuggestionConsumerDefinition>();
 
     // Transactional Outbox: HTTP POST /tickets se Publish ITicketCreated qua outbox
     // -> ghi cung transaction voi TicketEntity -> khong con dual-write.
@@ -69,7 +71,7 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<TicketDbContext>();
     await db.Database.EnsureCreatedAsync();
-    await TicketDbSchema.EnsureSagaEpochColumnsAsync(db); // includes AiDraft columns
+    await TicketDbSchema.EnsureSchemaAsync(db);
     // IdempotencyRecords + Ticket + MassTransit Outbox/Inbox tables tu sinh.
 }
 
@@ -77,6 +79,51 @@ var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "ticket-service" }))
     .AllowAnonymous();
+
+app.MapGet("/ready", async (
+    IHostEnvironment env,
+    Microsoft.Extensions.Options.IOptions<ServiceBusOptions> sbOpts,
+    Microsoft.Extensions.Options.IOptions<LocalMessagingOptions> localOpts,
+    CancellationToken cancellationToken) =>
+{
+    var pipeline = await DevBridgeEndpointPolicy.EvaluatePipelineAsync(
+        env, sbOpts.Value, localOpts.Value, cancellationToken);
+    if (!pipeline.Ready)
+        return Results.Json(
+            new { ready = false, transport = pipeline.Transport, detail = pipeline.Detail, httpBridge = pipeline.HttpBridge },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+
+    return Results.Ok(new
+    {
+        ready = true,
+        transport = pipeline.Transport,
+        detail = pipeline.Detail,
+        httpBridge = pipeline.HttpBridge,
+        note = "Chi kiem tra transport/DNS hoac cau hinh bridge — khong chung minh consumer dang chay. Dung smoke-test cho end-to-end."
+    });
+}).AllowAnonymous();
+
+if (DevBridgeEndpointPolicy.IsEnabled(app.Environment, localMessaging, serviceBus))
+{
+    app.MapPost("/internal/dev/consider-auto-suggestion", async (
+        HttpContext httpContext,
+        ConsiderAutoSuggestion request,
+        ConsiderAutoSuggestionApplier applier,
+        IPublishEndpoint publish) =>
+    {
+        if (!DevBridgeEndpointPolicy.IsLocalCaller(httpContext))
+            return DevBridgeEndpointPolicy.RejectDisabled();
+
+        var outcome = await applier.ApplyAsync(request);
+        if (!outcome.Accepted)
+        {
+            await publish.Publish<IAutoSuggestionDiscarded>(
+                new AutoSuggestionDiscarded(request.JobId, request.TicketId, outcome.RejectReason ?? "Rejected"));
+        }
+
+        return Results.Ok(new { accepted = outcome.Accepted, rejectReason = outcome.RejectReason });
+    }).AllowAnonymous();
+}
 
 // /debug/outbox query bang OutboxMessage cua MassTransit thay vi bang custom cu.
 app.MapGet("/debug/outbox", async (TicketDbContext db) =>
@@ -121,7 +168,11 @@ app.MapPost("/tickets", async (
     CreateTicketRequest request,
     HttpContext httpContext,
     TicketDbContext db,
-    IPublishEndpoint publish) =>
+    IPublishEndpoint publish,
+    OrchestratorDevBridge bridge,
+    Microsoft.Extensions.Options.IOptions<LocalMessagingOptions> localOpts,
+    Microsoft.Extensions.Options.IOptions<ServiceBusOptions> sbOpts,
+    ILogger<Program> logger) =>
 {
     if (string.IsNullOrWhiteSpace(request.EmployeeId) || string.IsNullOrWhiteSpace(request.Question))
         return Results.BadRequest(new { error = "employeeId va question la bat buoc." });
@@ -168,14 +219,17 @@ app.MapPost("/tickets", async (
     // Publish event qua outbox - MassTransit se INSERT vao bang OutboxMessage
     // cung transaction voi Ticket. Khi SaveChanges commit, bus outbox relay
     // se pickup va gui len Service Bus. Atomic.
-    var correlationId = Guid.NewGuid();
-    await publish.Publish<ITicketCreated>(new TicketCreated(
-        correlationId,
+    var jobId = Guid.NewGuid();
+    var created = new TicketCreated(
+        jobId,
         entity.Id,
         entity.EmployeeId,
         entity.Question,
-        entity.Category,
-        entity.SagaEpoch));
+        entity.Category);
+
+    var useHttpBridge = localOpts.Value.HttpBridgeEnabled && !sbOpts.Value.Enabled;
+    if (!useHttpBridge)
+        await publish.Publish<ITicketCreated>(created);
 
     var dto = TicketMapper.ToDto(entity);
     if (!string.IsNullOrWhiteSpace(idempotencyKey))
@@ -193,6 +247,18 @@ app.MapPost("/tickets", async (
 
     await db.SaveChangesAsync();
 
+    var bridgeFailed = false;
+    if (useHttpBridge)
+        bridgeFailed = !await bridge.TryNotifyTicketCreatedAsync(created, httpContext.RequestAborted);
+
+    if (bridgeFailed)
+    {
+        logger.LogError(
+            "Ticket {TicketId} da luu nhung auto-suggestion bridge that bai — job co the khong ton tai. Kiem tra AiOrchestrator /debug/auto-suggestion-jobs.",
+            entity.Id);
+        dto = TicketMapper.ToDto(entity, autoSuggestionNotifyFailed: true);
+    }
+
     return Results.Created($"/tickets/{entity.Id}", dto);
 }).WithEntraPolicy(entraEnabled, PolicyNames.UserOrService);
 
@@ -205,7 +271,7 @@ app.MapGet("/tickets", async (string? status, string? category, TicketDbContext 
         query = query.Where(t => t.Category == category);
 
     var items = (await query.ToListAsync()).OrderByDescending(t => t.CreatedAt).ToList();
-    return Results.Ok(items.Select(TicketMapper.ToDto));
+    return Results.Ok(items.Select(t => TicketMapper.ToDto(t)));
 }).WithEntraPolicy(entraEnabled, PolicyNames.AgentOrService);
 
 app.MapGet("/tickets/mine", async (HttpContext httpContext, TicketDbContext db) =>
@@ -218,7 +284,7 @@ app.MapGet("/tickets/mine", async (HttpContext httpContext, TicketDbContext db) 
     var items = (await db.Tickets
         .Where(t => t.OwnerOid == oid || (t.OwnerOid == null && username != null && t.EmployeeId == username))
         .ToListAsync()).OrderByDescending(t => t.CreatedAt).ToList();
-    return Results.Ok(items.Select(TicketMapper.ToDto));
+    return Results.Ok(items.Select(t => TicketMapper.ToDto(t)));
 }).WithEntraPolicy(entraEnabled, PolicyNames.EmployeeOrAbove);
 
 app.MapGet("/tickets/{id}", async (string id, HttpContext httpContext, TicketDbContext db) =>
@@ -230,32 +296,6 @@ app.MapGet("/tickets/{id}", async (string id, HttpContext httpContext, TicketDbC
         return Results.Forbid();
     return Results.Ok(TicketMapper.ToDto(entity));
 }).WithEntraPolicy(entraEnabled, PolicyNames.UserOrService);
-
-// Source-of-truth read model cho Saving timeout recovery (AiOrchestrator probe).
-app.MapGet("/internal/tickets/{id}/saga-progress", async (string id, TicketDbContext db) =>
-{
-    var entity = await db.Tickets.FindAsync(id);
-    if (entity is null)
-        return Results.NotFound();
-
-    return Results.Ok(new
-    {
-        ticketId = entity.Id,
-        status = entity.Status,
-        sagaEpoch = entity.SagaEpoch,
-        activeSagaCorrelationId = entity.ActiveSagaCorrelationId,
-        hasSuggestion = !string.IsNullOrWhiteSpace(entity.AiSuggestedAnswer),
-        hasAiDraft = !string.IsNullOrWhiteSpace(entity.AiDraftSuggestion)
-            && entity.AiDraftCorrelationId is not null
-            && entity.AiDraftSagaEpoch is not null,
-        aiDraftCorrelationId = entity.AiDraftCorrelationId,
-        aiDraftSagaEpoch = entity.AiDraftSagaEpoch,
-        aiDraftCategory = entity.AiDraftCategory,
-        aiDraftSuggestion = entity.AiDraftSuggestion,
-        aiDraftRelatedDocumentsJson = entity.AiDraftRelatedDocumentsJson,
-        sagaStopNote = entity.SagaStopNote
-    });
-}).WithEntraPolicy(entraEnabled, PolicyNames.Service);
 
 app.MapPost("/tickets/{id}/resolve", async (string id, ResolveTicketRequest request, HttpContext httpContext, TicketDbContext db) =>
 {

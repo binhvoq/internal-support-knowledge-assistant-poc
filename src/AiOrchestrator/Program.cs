@@ -8,40 +8,27 @@ using SupportPoc.AiOrchestrator.Consumers;
 using SupportPoc.AiOrchestrator.Data;
 using SupportPoc.AiOrchestrator.Mcp;
 using SupportPoc.AiOrchestrator.Options;
-using SupportPoc.AiOrchestrator.Saga;
-using SupportPoc.AiOrchestrator.Saga.Timeouts;
-using SupportPoc.AiOrchestrator.Saga.Timeouts.Activities;
-using SupportPoc.AiOrchestrator.Saga.Timeouts.Policies;
-using SupportPoc.AiOrchestrator.Saga.Timeouts.Probes;
 using SupportPoc.AiOrchestrator.Services;
 using SupportPoc.Shared.Auth;
 using SupportPoc.Shared.Contracts;
 using SupportPoc.Shared.Messaging;
 using SupportPoc.Shared.Telemetry;
-
 var builder = WebApplication.CreateBuilder(args);
-
 builder.Services.AddSupportPocApplicationInsights(builder.Configuration);
-
 var entraEnabled = builder.Configuration.IsEntraEnabled();
 if (entraEnabled)
 {
     builder.Services.AddSupportPocEntraAuth(builder.Configuration);
     builder.Services.AddSupportPocClientCredentials(builder.Configuration);
 }
-
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<IFunctionInvocationFilter, McpRoleInvocationFilter>();
-
 builder.Services.Configure<ServiceBusOptions>(builder.Configuration.GetSection(ServiceBusOptions.SectionName));
 builder.Services.Configure<AzureOpenAIOptions>(builder.Configuration.GetSection(AzureOpenAIOptions.SectionName));
 builder.Services.Configure<ServiceEndpointsOptions>(builder.Configuration.GetSection(ServiceEndpointsOptions.SectionName));
-builder.Services.Configure<SagaTimeoutOptions>(builder.Configuration.GetSection(SagaTimeoutOptions.SectionName));
-
+builder.Services.Configure<AutoSuggestionOptions>(builder.Configuration.GetSection(AutoSuggestionOptions.SectionName));
 builder.Services.AddDbContext<OrchestratorDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("Orchestrator") ?? "Data Source=orchestrator.db"));
-
-// ---------- Azure OpenAI / Semantic Kernel ----------
 var openAi = builder.Configuration.GetSection(AzureOpenAIOptions.SectionName).Get<AzureOpenAIOptions>() ?? new AzureOpenAIOptions();
 if (openAi.Enabled)
 {
@@ -52,7 +39,6 @@ else
 {
     builder.Services.AddKernel();
 }
-
 var mcpClientRegistration = builder.Services.AddHttpClient(McpToolGateway.HttpClientName);
 if (entraEnabled)
     mcpClientRegistration.AddHttpMessageHandler<EntraBearerTokenHandler>();
@@ -66,108 +52,107 @@ builder.Services.AddSingleton<KnowledgeSearchClient>();
 builder.Services.AddScoped<AiPipelineService>();
 builder.Services.AddScoped<IChatCompletionServiceAccessor>();
 builder.Services.AddScoped<TicketSuggestionService>();
-
-var probeRegistration = builder.Services.AddHttpClient<ITicketProgressProbe, HttpTicketProgressProbe>();
-if (entraEnabled)
-    probeRegistration.AddHttpMessageHandler<EntraBearerTokenHandler>();
-builder.Services.AddScoped<SavingTimeoutPolicy>();
-builder.Services.AddScoped<ISavingTimeoutEvaluator, SavingTimeoutEvaluator>();
-builder.Services.AddScoped<EvaluateSavingTimeoutActivity>();
-builder.Services.AddScoped<AnalyzingTimeoutPolicy>();
-builder.Services.AddScoped<IAnalyzingTimeoutEvaluator, AnalyzingTimeoutEvaluator>();
-builder.Services.AddScoped<EvaluateAnalyzingTimeoutActivity>();
-builder.Services.AddScoped<RunningAiTimeoutPolicy>();
-builder.Services.AddScoped<IRunningAiTimeoutEvaluator, RunningAiTimeoutEvaluator>();
-builder.Services.AddScoped<EvaluateRunningAiTimeoutActivity>();
-builder.Services.AddScoped<CompensatingTimeoutPolicy>();
-builder.Services.AddScoped<ICompensatingTimeoutEvaluator, CompensatingTimeoutEvaluator>();
-builder.Services.AddScoped<EvaluateCompensatingTimeoutActivity>();
-
-// ---------- MassTransit ----------
 var serviceBus = builder.Configuration.GetSection(ServiceBusOptions.SectionName).Get<ServiceBusOptions>() ?? new ServiceBusOptions();
-
+builder.Services.Configure<LocalMessagingOptions>(builder.Configuration.GetSection(LocalMessagingOptions.SectionName));
+var localMessaging = builder.Configuration.GetSection(LocalMessagingOptions.SectionName).Get<LocalMessagingOptions>() ?? new LocalMessagingOptions();
+builder.Services.AddHttpClient(HttpConsiderAutoSuggestionGateway.HttpClientName);
+if (localMessaging.HttpBridgeEnabled && !serviceBus.Enabled)
+    builder.Services.AddScoped<IConsiderAutoSuggestionGateway, HttpConsiderAutoSuggestionGateway>();
+else
+    builder.Services.AddScoped<IConsiderAutoSuggestionGateway, MassTransitConsiderAutoSuggestionGateway>();
 builder.Services.AddMassTransit(mt =>
 {
-    // Saga state machine + EF repository (saga state luu chung DbContext).
-    mt.AddSagaStateMachine<TicketSuggestionStateMachine, TicketSuggestionState, TicketSuggestionStateDefinition>()
-        .EntityFrameworkRepository(r =>
-        {
-            r.ConcurrencyMode = ConcurrencyMode.Optimistic;
-            r.ExistingDbContext<OrchestratorDbContext>();
-            r.UseSqlite();
-        });
-
-    mt.AddConsumer<RunAiPipelineConsumer, RunAiPipelineConsumerDefinition>();
-
-    // Transactional Outbox - bus-level. Moi Publish/Send tu code se di qua outbox cua DbContext.
+    mt.AddConsumer<TicketCreatedConsumer, TicketCreatedConsumerDefinition>();
     mt.AddEntityFrameworkOutbox<OrchestratorDbContext>(o =>
     {
         o.UseSqlite();
-        // Hosted service tu doc Pending outbox row -> publish len broker.
         o.UseBusOutbox();
-        // Cleanup InboxState row qua han (default 30 ngay).
         o.DuplicateDetectionWindow = TimeSpan.FromHours(1);
     });
-
     if (serviceBus.Enabled)
     {
         mt.UsingAzureServiceBus((ctx, cfg) =>
         {
             cfg.Host(serviceBus.ConnectionString);
-
-            // Endpoint convention cho phep .Send<T>() khong can chi destination.
-            // Cross-service commands den TicketService:
-            EndpointConvention.Map<IMarkTicketAnalyzing>(new Uri("queue:mark-ticket-analyzing"));
-            EndpointConvention.Map<ISaveTicketSuggestion>(new Uri("queue:save-ticket-suggestion"));
-            EndpointConvention.Map<ICompensateMarkAnalyzing>(new Uri("queue:compensate-mark-analyzing"));
-            EndpointConvention.Map<IRecordAiPipelineDraft>(new Uri("queue:record-ai-pipeline-draft"));
-            // Internal command:
-            EndpointConvention.Map<IRunAiPipeline>(new Uri("queue:run-ai-pipeline"));
-
-            // Tu dong tao endpoint cho saga + consumer + scheduler.
-            cfg.UseServiceBusMessageScheduler();
+            EndpointConvention.Map<IConsiderAutoSuggestion>(new Uri("queue:consider-auto-suggestion"));
             cfg.ConfigureEndpoints(ctx);
         });
     }
     else
     {
-        // Fallback in-memory transport cho dev khong co Service Bus.
-        // Luu y: chi work intra-process - TicketService khong nhan duoc command.
-        // InMemory transport co built-in delayed message support (cho saga timeout schedule).
-        mt.AddDelayedMessageScheduler();
         mt.UsingInMemory((ctx, cfg) =>
         {
-            EndpointConvention.Map<IMarkTicketAnalyzing>(new Uri("queue:mark-ticket-analyzing"));
-            EndpointConvention.Map<ISaveTicketSuggestion>(new Uri("queue:save-ticket-suggestion"));
-            EndpointConvention.Map<ICompensateMarkAnalyzing>(new Uri("queue:compensate-mark-analyzing"));
-            EndpointConvention.Map<IRecordAiPipelineDraft>(new Uri("queue:record-ai-pipeline-draft"));
-            EndpointConvention.Map<IRunAiPipeline>(new Uri("queue:run-ai-pipeline"));
-
-            cfg.UseDelayedMessageScheduler();
+            EndpointConvention.Map<IConsiderAutoSuggestion>(new Uri("queue:consider-auto-suggestion"));
             cfg.ConfigureEndpoints(ctx);
         });
     }
 });
-
 builder.Services.AddCors(options =>
     options.AddDefaultPolicy(p => p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
-
 var app = builder.Build();
-
 app.UseCors();
 if (entraEnabled)
     app.UseSupportPocEntraAuth();
-
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<OrchestratorDbContext>();
     await db.Database.EnsureCreatedAsync();
-    await OrchestratorDbSchema.EnsureSagaStateColumnsAsync(db);
+    await OrchestratorDbSchema.EnsureSchemaAsync(db);
 }
-
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "ai-orchestrator" }))
     .AllowAnonymous();
+app.MapGet("/ready", async (
+    IHostEnvironment env,
+    IOptions<ServiceBusOptions> sbOpts,
+    IOptions<LocalMessagingOptions> localOpts,
+    CancellationToken cancellationToken) =>
+{
+    var pipeline = await DevBridgeEndpointPolicy.EvaluatePipelineAsync(
+        env, sbOpts.Value, localOpts.Value, cancellationToken);
+    if (!pipeline.Ready)
+        return Results.Json(
+            new { ready = false, transport = pipeline.Transport, detail = pipeline.Detail, httpBridge = pipeline.HttpBridge },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
 
+    return Results.Ok(new
+    {
+        ready = true,
+        transport = pipeline.Transport,
+        detail = pipeline.Detail,
+        httpBridge = pipeline.HttpBridge,
+        note = "Chi kiem tra transport/DNS hoac cau hinh bridge — khong chung minh consumer dang chay. Dung smoke-test cho end-to-end."
+    });
+}).AllowAnonymous();
+if (DevBridgeEndpointPolicy.IsEnabled(app.Environment, localMessaging, serviceBus))
+{
+    app.MapPost("/internal/dev/ticket-created", async (HttpContext httpContext, TicketCreated message, IBus bus) =>
+    {
+        if (!DevBridgeEndpointPolicy.IsLocalCaller(httpContext))
+            return DevBridgeEndpointPolicy.RejectDisabled();
+
+        await bus.Publish<ITicketCreated>(message);
+        return Results.Accepted();
+    }).AllowAnonymous();
+}
+app.MapGet("/tickets/{ticketId}/auto-suggestion", async (string ticketId, OrchestratorDbContext db) =>
+{
+    var jobs = await db.AutoSuggestionJobs
+        .Where(j => j.TicketId == ticketId)
+        .ToListAsync();
+    var job = jobs.OrderByDescending(j => j.CreatedAt).FirstOrDefault();
+    if (job is null)
+        return Results.NotFound();
+    return Results.Ok(new
+    {
+        job.JobId,
+        job.TicketId,
+        job.Status,
+        job.FailureReason,
+        job.DiscardReason,
+        job.CreatedAt,
+        job.UpdatedAt
+    });
+}).AllowAnonymous();
 app.MapGet("/mcp/tools", async (McpDynamicPluginLoader loader, CancellationToken ct) =>
 {
     var catalog = await loader.LoadCatalogAsync(ct);
@@ -177,30 +162,21 @@ app.MapGet("/mcp/tools", async (McpDynamicPluginLoader loader, CancellationToken
         tools = catalog.Tools.Select(t => new { name = t.Name, description = t.Description })
     });
 }).WithEntraPolicy(entraEnabled, PolicyNames.AgentOrService);
-
 app.MapGet("/mcp/allowed-tools", async (McpToolAccessService access, HttpContext httpContext, CancellationToken ct) =>
 {
     var roles = httpContext.User.FindAll(ClaimTypes.Role).Select(c => c.Value);
     var allowed = await access.GetAllowedToolNamesAsync(roles, ct);
     return Results.Ok(new { count = allowed.Count, tools = allowed.OrderBy(tool => tool, StringComparer.OrdinalIgnoreCase) });
 }).WithEntraPolicy(entraEnabled, PolicyNames.EmployeeOrAbove);
-
-// /debug/dlq doc dead-letter queue cua mot endpoint Azure Service Bus.
-// Tra ve count cho queue chinh VA queue phu _error (MassTransit default faulted transport).
-// Verify ca 2 vi:
-//   - Truoc khi ConfigureDeadLetterQueueErrorTransport: message vao queue '_error'
-//   - Sau khi cau hinh: message vao ASB native DLQ cua queue chinh
-//   - Co the can ca 2 trong giai doan migration / dev voi queue da ton tai.
 app.MapGet("/debug/dlq", async (string? queue, IOptions<ServiceBusOptions> sbOpts) =>
 {
-    var queueName = string.IsNullOrWhiteSpace(queue) ? "run-ai-pipeline" : queue.Trim();
+    var queueName = string.IsNullOrWhiteSpace(queue) ? "auto-suggestion-ticket-created" : queue.Trim();
     var conn = sbOpts.Value.ConnectionString;
     if (string.IsNullOrWhiteSpace(conn))
         return Results.Ok(new { error = "ServiceBus.ConnectionString chua duoc cau hinh.", queue = queueName });
     try
     {
         var admin = new ServiceBusAdministrationClient(conn);
-
         async Task<QueueStats> ReadAsync(string name)
         {
             try
@@ -220,16 +196,13 @@ app.MapGet("/debug/dlq", async (string? queue, IOptions<ServiceBusOptions> sbOpt
                 return new QueueStats(name, false, 0, 0, 0, 0, 0);
             }
         }
-
         var main = await ReadAsync(queueName);
         var error = await ReadAsync(queueName + "_error");
-
         return Results.Ok(new
         {
             queue = queueName,
             mainQueue = main,
             errorQueue = error,
-            // Field tong hop: bat ki cho nao tang nghia la failure pattern hoat dong.
             totalFailedMessages = main.DeadLetterMessageCount + error.ActiveMessageCount
         });
     }
@@ -238,11 +211,9 @@ app.MapGet("/debug/dlq", async (string? queue, IOptions<ServiceBusOptions> sbOpt
         return Results.Ok(new { error = ex.Message, queue = queueName });
     }
 }).AllowAnonymous();
-
-// /debug/saga query MassTransit-managed TicketSuggestionStates thay vi SagaLogEntries cu.
-app.MapGet("/debug/saga", async (string? ticketId, OrchestratorDbContext db) =>
+app.MapGet("/debug/auto-suggestion-jobs", async (string? ticketId, OrchestratorDbContext db) =>
 {
-    var query = db.TicketSuggestionStates.AsQueryable();
+    var query = db.AutoSuggestionJobs.AsQueryable();
     if (!string.IsNullOrWhiteSpace(ticketId))
         query = query.Where(x => x.TicketId == ticketId);
     var items = (await query.ToListAsync())
@@ -250,24 +221,17 @@ app.MapGet("/debug/saga", async (string? ticketId, OrchestratorDbContext db) =>
         .Take(100)
         .Select(x => new
         {
-            x.CorrelationId,
+            x.JobId,
             x.TicketId,
-            x.CurrentState,
-            x.Category,
-            x.OriginalStatus,
+            x.Status,
             x.FailureReason,
-            x.CompensationReason,
-            x.PendingTimeoutOutcome,
-            x.TimeoutDecisionReason,
-            x.TimeoutVerifyAttempts,
-            x.SaveResendIssued,
+            x.DiscardReason,
             x.CreatedAt,
             x.UpdatedAt
         })
         .ToList();
     return Results.Ok(items);
 }).AllowAnonymous();
-
 app.MapPost("/ai/suggest-answer", async (SuggestAnswerRequest request, TicketSuggestionService service, CancellationToken ct) =>
 {
     if (string.IsNullOrWhiteSpace(request.Question))
@@ -275,19 +239,16 @@ app.MapPost("/ai/suggest-answer", async (SuggestAnswerRequest request, TicketSug
     var answer = await service.SuggestAnswerAsync(request.Question, request.Category, ct);
     return Results.Ok(new { suggestedAnswer = answer });
 }).WithEntraPolicy(entraEnabled, PolicyNames.AgentOrService);
-
 app.MapPost("/ai/chat", async (ChatRequest request, TicketSuggestionService service, HttpContext httpContext, CancellationToken ct) =>
 {
     if (string.IsNullOrWhiteSpace(request.Message))
         return Results.BadRequest(new { error = "message la bat buoc." });
-
     IEnumerable<string>? roles = entraEnabled
         ? httpContext.User.FindAll(ClaimTypes.Role).Select(c => c.Value).ToArray()
         : null;
     var reply = await service.ChatAsync(request.Message, roles, ct);
     return Results.Ok(new { reply });
 }).WithEntraPolicy(entraEnabled, PolicyNames.EmployeeOrAbove);
-
 app.MapPost("/ai/classify-ticket", async (ClassifyRequest request, TicketSuggestionService service, CancellationToken ct) =>
 {
     if (string.IsNullOrWhiteSpace(request.Question))
@@ -295,14 +256,10 @@ app.MapPost("/ai/classify-ticket", async (ClassifyRequest request, TicketSuggest
     var result = await service.ClassifyTicketAsync(request.Question, ct);
     return result is null ? Results.Problem("Khong phan loai duoc.") : Results.Ok(result);
 }).WithEntraPolicy(entraEnabled, PolicyNames.Service);
-
 app.Run();
-
 public sealed record SuggestAnswerRequest(string Question, string? Category);
 public sealed record ChatRequest(string Message);
 public sealed record ClassifyRequest(string Question);
-
-// DTO cho /debug/dlq.
 public sealed record QueueStats(
     string Name,
     bool Exists,

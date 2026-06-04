@@ -10,7 +10,8 @@ PoC nay la **Internal Support Knowledge Assistant**: employee tao support ticket
 |------|----------|
 | [`../docs/technical_learn.md`](../docs/technical_learn.md) | Checklist cong nghe can luyen. Chi doc, khong tu y sua neu owner khong yeu cau. |
 | [`../docs/mini_business_poc.md`](../docs/mini_business_poc.md) | Mo ta nghiep vu mini va cach gan Microservices, Event-Driven, RAG, Saga, Idempotency, Inbox, Outbox vao flow. |
-| [`../docs/saga-orchestration-timeout-recovery.md`](../docs/saga-orchestration-timeout-recovery.md) | Saga timeout recovery, fault injection, unit test va debug. |
+| [`../docs/auto-suggestion-proposal.md`](../docs/auto-suggestion-proposal.md) | Proposal pipeline auto-suggestion (thay saga). |
+| [`../docs/saga-orchestration-timeout-recovery.md`](../docs/saga-orchestration-timeout-recovery.md) | **Deprecated** — saga timeout (tham khảo lịch sử). |
 | [`../docs/zero-trust-identity.md`](../docs/zero-trust-identity.md) | Zero Trust Identity: muc tieu, Entra roles, tien trinh, link MS Learn. |
 | [`../docs/user_stories.md`](../docs/user_stories.md) | User stories va acceptance criteria de implement/kiem tra PoC. |
 | [`../SupportPoc.slnx`](../SupportPoc.slnx) | Solution .NET backend. |
@@ -20,8 +21,8 @@ PoC nay la **Internal Support Knowledge Assistant**: employee tao support ticket
 ## Quy tac cho AI/coder sau
 
 - Khong tao them script moi neu script hien co da lam duoc viec. Sua script hien co va cap nhat README nay.
-- Khong ghi secret vao git. `config/azure.local.json` va `src/*/appsettings.Development.json` la local generated config.
-- Sau thay doi saga/timeout/compensation: doc [`../docs/saga-orchestration-timeout-recovery.md`](../docs/saga-orchestration-timeout-recovery.md), chay `dotnet test`, `bash scripts/restart-services.sh`, `bash scripts/smoke-test.sh`.
+- Khong ghi secret vao git. `src/*/appsettings.Development.json` da nam trong `.gitignore` — copy tu `appsettings.Development.json.example` roi dien key local. **Rotate** Azure/Entra key neu tung commit/push file Development that.
+- Sau thay doi auto-suggestion pipeline: doc [`../docs/auto-suggestion-proposal.md`](../docs/auto-suggestion-proposal.md), chay `dotnet test`, `bash scripts/restart-services.sh`, `bash scripts/smoke-test.sh`.
 - Azure Search Basic va Service Bus Standard ton phi co dinh. Dung `bash scripts/azure-resources-stop.sh` khi khong can chay nua.
 - `docs/technical_learn.md` la input checklist cua owner; tranh sua file nay neu task khong noi ro.
 - Terraform trong [`../infra/terraform`](../infra/terraform) la huong dai han de start/stop Azure resources. Scripts van duoc giu trong luc Terraform on dinh.
@@ -38,6 +39,8 @@ PoC nay la **Internal Support Knowledge Assistant**: employee tao support ticket
 | [`azure-resources-start.sh`](azure-resources-start.sh) | Bat lai resources: refresh neu RG con ton tai, provision neu RG da bi xoa. | Khi muon chay lai PoC sau khi stop. |
 | [`restart-services.sh`](restart-services.sh) | Build va restart 4 backend local tren ports 5001-5004. | Sau khi sync config hoac sua backend. |
 | [`smoke-test.sh`](smoke-test.sh) | Chay flow dev end-to-end: health, MCP tools, re-index, tao ticket, AI suggestion, chat, resolve. Khi `AzureAd:Enabled=true`: tu dong dung client credentials; re-index can `SMOKE_BEARER_TOKEN` (user JWT). | De xac nhan PoC dang work. |
+| [`integration-e2e.sh`](integration-e2e.sh) | Real integration smoke: `/ready` matrix (SB/bridge/Production), happy path bridge + Service Bus, BC-03/BC-06, AI fail, bridge notify. Dung `--no-launch-profile` de `ASPNETCORE_ENVIRONMENT` khong bi `launchSettings.json` ghi de. | Sau thay doi messaging/auth; bat bug runtime khong unit test. |
+| [`integration-e2e-legacy-poison.sh`](integration-e2e-legacy-poison.sh) | DB legacy (`TicketSuggestionStates` only) + `__POISON_AI__` / DLQ. | Truoc commit khi sua orchestrator schema hoac MassTransit retry. |
 
 **Entra login + E2E:** Doc day du [`../docs/zero-trust-identity.md`](../docs/zero-trust-identity.md) §5, §10, §11.
 
@@ -81,7 +84,12 @@ bash scripts/restart-services.sh
 
 # Smoke test
 bash scripts/smoke-test.sh
+
+# Integration day du (Service Bus + bridge + fault markers, ~5–8 phut)
+bash scripts/integration-e2e.sh
 ```
+
+**Luu y:** `dotnet run` mac dinh doc `Properties/launchSettings.json` va co the ep `ASPNETCORE_ENVIRONMENT=Development`. Scripts `restart-services.sh` / `integration-e2e.sh` dung `--no-launch-profile` de test Production/not-ready chinh xac.
 
 Ket qua smoke test hop le:
 

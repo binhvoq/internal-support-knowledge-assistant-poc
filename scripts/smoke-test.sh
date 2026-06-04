@@ -66,6 +66,21 @@ for port in 5001 5002 5003 5004; do
   "$CURL" -sf "http://localhost:$port/health" >/dev/null || { echo "Service :$port khong chay."; exit 1; }
 done
 
+echo "Readiness (messaging pipeline)..."
+for spec in "5001:ticket-service" "5003:ai-orchestrator"; do
+  port="${spec%%:*}"
+  name="${spec##*:}"
+  READY_CODE=$("$CURL" -s -o /tmp/ready-"$port".json -w "%{http_code}" "http://localhost:$port/ready")
+  if [[ "$READY_CODE" != "200" ]]; then
+    echo "FAIL /ready :$port ($name) HTTP $READY_CODE"
+    cat /tmp/ready-"$port".json 2>/dev/null || true
+    echo ""
+    echo "Goi y: Service Bus unreachable -> bash scripts/restart-services.sh (tu bat HTTP bridge) hoac fix Azure SB."
+    exit 1
+  fi
+  echo "  OK /ready :$port"
+done
+
 echo "MCP tools/list (qua AiOrchestrator)..."
 TOOLS=$("$CURL" -sf "http://localhost:5003/mcp/tools" "${AUTH_HEADER[@]}")
 TOOL_COUNT=$(echo "$TOOLS" | "$PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d['count'])")
@@ -91,14 +106,52 @@ TICKET=$("$CURL" -sf -X POST http://localhost:5001/tickets \
 ID=$(echo "$TICKET" | "$PYTHON" -c "import sys,json; print(json.load(sys.stdin)['id'])")
 echo "Ticket: $ID"
 
-for i in 1 2 3 4 5 6; do
+HAS_AI=False
+STATUS=New
+JOB_CODE=404
+JOB_STATUS=""
+for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
   sleep 5
   DETAIL=$("$CURL" -sf "http://localhost:5001/tickets/$ID" "${AUTH_HEADER[@]}")
   STATUS=$(echo "$DETAIL" | "$PYTHON" -c "import sys,json; print(json.load(sys.stdin)['status'])")
   HAS_AI=$(echo "$DETAIL" | "$PYTHON" -c "import sys,json; print(json.load(sys.stdin).get('hasAiSuggestion', False))")
-  echo "  poll $i: status=$STATUS hasAi=$HAS_AI"
-  [[ "$HAS_AI" == "True" ]] && break
+  JOB_CODE=$("$CURL" -s -o /tmp/job.json -w "%{http_code}" "http://localhost:5003/tickets/$ID/auto-suggestion")
+  if [[ "$JOB_CODE" == "200" ]]; then
+    JOB_STATUS=$(echo "$(cat /tmp/job.json)" | "$PYTHON" -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
+  else
+    JOB_STATUS=""
+  fi
+  echo "  poll $i: status=$STATUS hasAi=$HAS_AI jobHttp=$JOB_CODE jobStatus=$JOB_STATUS"
+  if [[ "$HAS_AI" == "True" || "$STATUS" == "Suggested" ]]; then
+    break
+  fi
+  if [[ "$JOB_STATUS" == "Failed" ]]; then
+    echo "FAIL: auto-suggestion job Failed."
+    cat /tmp/job.json
+    exit 1
+  fi
 done
+
+if [[ "$HAS_AI" != "True" && "$STATUS" != "Suggested" ]]; then
+  echo "FAIL: auto-suggestion khong hoan thanh trong 60s (can hasAi=True hoac status=Suggested)."
+  echo "  job endpoint HTTP=$JOB_CODE"
+  "$CURL" -sf "http://localhost:5003/debug/auto-suggestion-jobs?ticketId=$ID" | head -c 800 || true
+  echo ""
+  exit 1
+fi
+
+if [[ "$JOB_CODE" != "200" ]]; then
+  echo "FAIL: khong tim thay auto-suggestion job cho ticket $ID (HTTP $JOB_CODE)."
+  exit 1
+fi
+
+if [[ "$JOB_STATUS" != "Completed" ]]; then
+  echo "FAIL: job status=$JOB_STATUS (can Completed sau happy path)."
+  cat /tmp/job.json
+  exit 1
+fi
+
+echo "Auto suggestion OK: status=$STATUS job=$JOB_STATUS"
 
 echo "AI Chat (get status)..."
 CHAT_CODE=$("$CURL" -s -o /tmp/chat.json -w "%{http_code}" -X POST http://localhost:5003/ai/chat \

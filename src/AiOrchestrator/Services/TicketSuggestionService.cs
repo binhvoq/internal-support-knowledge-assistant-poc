@@ -10,9 +10,7 @@ using SupportPoc.AiOrchestrator.Options;
 
 namespace SupportPoc.AiOrchestrator.Services;
 
-// Sau khi chuyen sang MassTransit saga, service nay CHI con ho tro cac HTTP endpoint
-// (chat / suggest-answer / classify-ticket) - khong con orchestration logic nua.
-// Toan bo orchestration nam o TicketSuggestionStateMachine.
+// HTTP /ai/* only — auto suggestion orchestration is TicketCreatedConsumer + proposal pipeline.
 public sealed class TicketSuggestionService
 {
     private readonly AiPipelineService _pipeline;

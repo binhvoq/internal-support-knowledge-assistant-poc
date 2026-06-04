@@ -1,5 +1,7 @@
 # Saga timeout recovery
 
+> **Deprecated (2026-06):** Luồng MassTransit saga `TicketSuggestionStateMachine` đã được thay bằng **proposal pipeline** (`TicketCreatedConsumer` + `ConsiderAutoSuggestion`). Tài liệu này chỉ để tham khảo lịch sử. Xem [`auto-suggestion-proposal.md`](auto-suggestion-proposal.md).
+
 Tai lieu tham chieu cho orchestration `TicketSuggestion`: timeout = nghi ngo → probe TicketService → policy → outcome. Khong compensate/fail mu.
 
 ## Nguyen tac
