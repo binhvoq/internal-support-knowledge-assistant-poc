@@ -17,6 +17,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/SupportPoc.AiOrchestrator.Tests/SupportPoc.AiOrchestrator.Tests.csproj" />
+    <Project Path="tests/SupportPoc.KnowledgeService.Tests/SupportPoc.KnowledgeService.Tests.csproj" />
     <Project Path="tests/SupportPoc.TicketService.Tests/SupportPoc.TicketService.Tests.csproj" />
   </Folder>
 </Solution>

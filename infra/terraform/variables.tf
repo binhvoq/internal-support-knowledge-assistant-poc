@@ -60,8 +60,8 @@ variable "search_sku" {
 
 variable "search_index_name" {
   type        = string
-  description = "Knowledge index name used by Knowledge Service."
-  default     = "knowledge-documents"
+  description = "Knowledge chunk index name used by Knowledge Service."
+  default     = "knowledge-chunks"
 }
 
 variable "embedding_deployment_name" {

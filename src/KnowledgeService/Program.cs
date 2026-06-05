@@ -25,15 +25,17 @@ builder.Services.Configure<AzureStorageOptions>(builder.Configuration.GetSection
 builder.Services.Configure<ServiceBusOptions>(builder.Configuration.GetSection(ServiceBusOptions.SectionName));
 builder.Services.AddSingleton<ReindexState>();
 builder.Services.AddSingleton<KnowledgeSearchService>();
+builder.Services.AddHttpClient(nameof(AzureSearchIngestionService));
+builder.Services.AddSingleton<AzureSearchIngestionService>();
 builder.Services.AddSingleton<EmbeddingService>();
 builder.Services.AddSingleton<DocumentBlobStore>();
-builder.Services.AddSingleton<PdfKnowledgeExtractor>();
+builder.Services.AddSingleton<DocumentIngestionStatusRefresher>();
+builder.Services.AddHostedService<DocumentIngestionRefreshBackgroundService>();
 builder.Services.AddDbContext<KnowledgeDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("Knowledge") ?? "Data Source=knowledge.db"));
 builder.Services.AddCors(options =>
     options.AddDefaultPolicy(p => p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
 
-// ---------- MassTransit (publish-only - KnowledgeService khong tham gia saga) ----------
 var serviceBus = builder.Configuration.GetSection(ServiceBusOptions.SectionName).Get<ServiceBusOptions>() ?? new ServiceBusOptions();
 builder.Services.AddMassTransit(mt =>
 {
@@ -79,19 +81,20 @@ using (var scope = app.Services.CreateScope())
     }
 
     var search = scope.ServiceProvider.GetRequiredService<KnowledgeSearchService>();
-    var embeddings = scope.ServiceProvider.GetRequiredService<EmbeddingService>();
+    var ingestion = scope.ServiceProvider.GetRequiredService<AzureSearchIngestionService>();
     var blobStore = scope.ServiceProvider.GetRequiredService<DocumentBlobStore>();
-    var extractor = scope.ServiceProvider.GetRequiredService<PdfKnowledgeExtractor>();
-    var searchOptions = scope.ServiceProvider.GetRequiredService<IOptions<AzureSearchOptions>>();
     var logger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
     try
     {
-        await search.EnsureIndexAsync();
-        await SeedDemoPdfAsync(app.Environment, db, extractor, blobStore, search, embeddings, searchOptions.Value, logger);
+        await search.EnsureChunkIndexAsync();
+        await ingestion.EnsurePipelineAsync();
+        var searchOptions = scope.ServiceProvider.GetRequiredService<IOptions<AzureSearchOptions>>().Value;
+        var ingestionRefresher = scope.ServiceProvider.GetRequiredService<DocumentIngestionStatusRefresher>();
+        await SeedDemoPdfAsync(app.Environment, db, blobStore, ingestion, ingestionRefresher, searchOptions, logger);
     }
     catch (Exception ex)
     {
-        logger.LogWarning(ex, "Khong khoi tao duoc Azure AI Search index; service se chay voi local search fallback.");
+        logger.LogWarning(ex, "Khong khoi tao duoc Azure AI Search chunk pipeline; service se chay voi local search fallback.");
     }
 }
 
@@ -123,8 +126,8 @@ app.MapPost("/documents", async (
     CreateDocumentRequest request,
     KnowledgeDbContext db,
     DocumentBlobStore blobStore,
-    KnowledgeSearchService search,
-    EmbeddingService embeddings,
+    AzureSearchIngestionService ingestion,
+    DocumentIngestionStatusRefresher ingestionRefresher,
     IOptions<AzureSearchOptions> searchOptions,
     IPublishEndpoint publish,
     CancellationToken cancellationToken) =>
@@ -133,6 +136,7 @@ app.MapPost("/documents", async (
         return Results.BadRequest(new { error = "title va content la bat buoc." });
 
     var ids = await db.Documents.Select(d => d.Id).ToListAsync();
+    var uploadedAt = DateTimeOffset.UtcNow;
     var entity = new KnowledgeDocumentEntity
     {
         Id = DocumentIdGenerator.Next(ids),
@@ -142,16 +146,48 @@ app.MapPost("/documents", async (
         SourceUrl = request.SourceUrl,
         ContentType = "text/plain",
         IngestionStatus = "Processing",
-        UpdatedAt = DateTimeOffset.UtcNow
+        IngestionMessage = "Dang upload text va cho Azure indexer chunk/embed.",
+        UpdatedAt = uploadedAt
     };
+    entity.FileName = $"{entity.Id}.txt";
 
-    var blobUrl = await blobStore.UploadAsync(entity.Id, entity.Content, cancellationToken);
-    if (string.IsNullOrWhiteSpace(entity.SourceUrl) && blobUrl is not null)
+    if (!ingestion.IsPipelineConfigured)
+    {
+        entity.IngestionStatus = "Ready";
+        entity.IngestionMessage = "Azure pipeline chua cau hinh; dung local keyword search tren noi dung text.";
+        entity.IngestedAt = uploadedAt;
+        db.Documents.Add(entity);
+        await db.SaveChangesAsync(cancellationToken);
+        return Results.Created($"/documents/{entity.Id}", ToDto(entity));
+    }
+
+    string? blobUrl;
+    try
+    {
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(entity.Content));
+        blobUrl = await blobStore.UploadKnowledgeFileAsync(
+            entity.Id,
+            stream,
+            entity.FileName,
+            "text/plain",
+            BuildBlobMetadata(entity, uploadedAt),
+            cancellationToken);
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogWarning(ex, "Upload knowledge text blob for {DocumentId} failed.", entity.Id);
+        return Results.Problem(
+            title: "Upload knowledge file len Blob that bai.",
+            detail: "Khong the upload file len Azure Blob Storage luc nay. Thu lai sau.",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    if (blobUrl is not null)
         entity.SourceUrl = blobUrl;
 
     db.Documents.Add(entity);
-    await db.SaveChangesAsync();
-    await MarkDocumentReadyAsync(entity, db, search, embeddings, searchOptions.Value, cancellationToken);
+    await db.SaveChangesAsync(cancellationToken);
+    await WaitForChunkIndexingAsync(entity, db, ingestion, ingestionRefresher, searchOptions.Value, cancellationToken);
     try
     {
         await publish.Publish(new KnowledgeDocumentUploaded(entity.Id), cancellationToken);
@@ -160,6 +196,7 @@ app.MapPost("/documents", async (
     {
         app.Logger.LogWarning(ex, "Publish KnowledgeDocumentUploaded that bai; tiep tuc local flow.");
     }
+
     return Results.Created($"/documents/{entity.Id}", ToDto(entity));
 }).WithEntraPolicy(entraEnabled, PolicyNames.KnowledgeAdmin);
 
@@ -168,10 +205,9 @@ app.MapPost("/documents/upload-pdf", async (
     [FromForm] string? title,
     [FromForm] string? category,
     KnowledgeDbContext db,
-    PdfKnowledgeExtractor extractor,
     DocumentBlobStore blobStore,
-    KnowledgeSearchService search,
-    EmbeddingService embeddings,
+    AzureSearchIngestionService ingestion,
+    DocumentIngestionStatusRefresher ingestionRefresher,
     IOptions<AzureSearchOptions> searchOptions,
     IPublishEndpoint publish,
     CancellationToken cancellationToken) =>
@@ -184,44 +220,55 @@ app.MapPost("/documents/upload-pdf", async (
         && !string.Equals(file.ContentType, "application/pdf", StringComparison.OrdinalIgnoreCase))
         return Results.BadRequest(new { error = "Chi ho tro upload file PDF." });
 
-    string content;
-    try
-    {
-        await using var stream = file.OpenReadStream();
-        content = extractor.ExtractText(stream);
-    }
-    catch (Exception ex)
-    {
-        return Results.BadRequest(new { error = $"Khong doc duoc PDF: {ex.Message}" });
-    }
-
-    if (string.IsNullOrWhiteSpace(content))
-        return Results.BadRequest(new { error = "PDF khong co text de trich xuat. Neu la PDF scan/image, can them OCR truoc khi RAG." });
+    if (!ingestion.IsPipelineConfigured)
+        return Results.BadRequest(new { error = "Azure Search indexer pipeline chua cau hinh (Search + Storage + OpenAI)." });
 
     var ids = await db.Documents.Select(d => d.Id).ToListAsync(cancellationToken);
+    var uploadedAt = DateTimeOffset.UtcNow;
     var normalizedTitle = string.IsNullOrWhiteSpace(title)
         ? Path.GetFileNameWithoutExtension(file.FileName)
         : title.Trim();
+    var fileName = Path.GetFileName(file.FileName);
     var entity = new KnowledgeDocumentEntity
     {
         Id = DocumentIdGenerator.Next(ids),
         Title = normalizedTitle,
         Category = string.IsNullOrWhiteSpace(category) ? SupportCategory.Other : category.Trim(),
-        Content = content,
-        FileName = Path.GetFileName(file.FileName),
-        ContentType = file.ContentType,
+        Content = string.Empty,
+        FileName = fileName,
+        ContentType = NormalizeKnowledgeContentType(fileName, file.ContentType),
         IngestionStatus = "Processing",
-        IngestionMessage = "Da trich xuat text tu PDF, dang dua vao knowledge index.",
-        UpdatedAt = DateTimeOffset.UtcNow
+        IngestionMessage = "Da upload PDF len Blob, dang cho Azure indexer chunk/embed.",
+        UpdatedAt = uploadedAt
     };
 
-    var blobUrl = await blobStore.UploadAsync(entity.Id, entity.Content, cancellationToken);
+    string? blobUrl;
+    try
+    {
+        await using var stream = file.OpenReadStream();
+        blobUrl = await blobStore.UploadKnowledgeFileAsync(
+            entity.Id,
+            stream,
+            fileName,
+            entity.ContentType,
+            BuildBlobMetadata(entity, uploadedAt),
+            cancellationToken);
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogWarning(ex, "Upload PDF blob for {DocumentId} failed.", entity.Id);
+        return Results.Problem(
+            title: "Upload PDF len Blob that bai.",
+            detail: "Khong the upload file len Azure Blob Storage luc nay. Thu lai sau.",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
     if (blobUrl is not null)
         entity.SourceUrl = blobUrl;
 
     db.Documents.Add(entity);
     await db.SaveChangesAsync(cancellationToken);
-    await MarkDocumentReadyAsync(entity, db, search, embeddings, searchOptions.Value, cancellationToken);
+    await WaitForChunkIndexingAsync(entity, db, ingestion, ingestionRefresher, searchOptions.Value, cancellationToken);
     try
     {
         await publish.Publish(new KnowledgeDocumentUploaded(entity.Id), cancellationToken);
@@ -249,15 +296,15 @@ app.MapDelete("/documents/{id}", async (
 
     try
     {
-        await search.DeleteDocumentAsync(id, cancellationToken);
+        await search.DeleteChunksByDocumentIdAsync(id, cancellationToken);
     }
     catch (Exception ex)
     {
-        app.Logger.LogWarning(ex, "Xoa document {DocumentId} khoi Azure AI Search that bai.", id);
-        return Results.Problem(detail: ex.Message, title: $"Xoa document {id} khoi Azure AI Search that bai");
+        app.Logger.LogWarning(ex, "Xoa chunk cua document {DocumentId} khoi Azure AI Search that bai.", id);
+        return Results.Problem(detail: ex.Message, title: $"Xoa chunk cua document {id} khoi Azure AI Search that bai");
     }
 
-    await blobStore.DeleteAsync(id, cancellationToken);
+    await blobStore.DeleteAsync(id, entity.FileName, cancellationToken);
     db.Documents.Remove(entity);
     await db.SaveChangesAsync(cancellationToken);
 
@@ -270,8 +317,7 @@ app.MapGet("/documents/reindex-status", (ReindexState state) => Results.Ok(state
 app.MapPost("/documents/reindex", async (
     HttpContext httpContext,
     KnowledgeDbContext db,
-    KnowledgeSearchService search,
-    EmbeddingService embeddings,
+    AzureSearchIngestionService ingestion,
     ReindexState state,
     IPublishEndpoint publish) =>
 {
@@ -293,18 +339,15 @@ app.MapPost("/documents/reindex", async (
     if (state.Status == "Indexing")
         return Results.Conflict(new { error = "Re-index dang chay." });
 
+    if (!ingestion.IsPipelineConfigured)
+        return Results.BadRequest(new { error = "Azure Search indexer pipeline chua cau hinh." });
+
     state.Set("Indexing");
     var docs = await db.Documents.ToListAsync();
     try
     {
-        await search.EnsureIndexAsync();
-        var batch = new List<(KnowledgeDocumentEntity Entity, IReadOnlyList<float>? Embedding)>();
-        foreach (var doc in docs)
-        {
-            var vector = await embeddings.CreateEmbeddingAsync($"{doc.Title}\n{doc.Content}");
-            batch.Add((doc, vector));
-        }
-        await search.UpsertDocumentsAsync(batch);
+        await ingestion.EnsurePipelineAsync(httpContext.RequestAborted);
+        await ingestion.TryRunIndexerAsync(httpContext.RequestAborted);
         state.Set("Completed");
         try
         {
@@ -314,7 +357,8 @@ app.MapPost("/documents/reindex", async (
         {
             app.Logger.LogWarning(ex, "Publish KnowledgeIndexUpdated that bai; tiep tuc local flow.");
         }
-        var response = new { status = "Completed", documentCount = docs.Count };
+
+        var response = new { status = "Completed", documentCount = docs.Count, mode = "azure-indexer" };
         if (!string.IsNullOrWhiteSpace(idempotencyKey))
         {
             db.IdempotencyRecords.Add(new IdempotencyRecordEntity
@@ -360,7 +404,6 @@ app.MapGet("/search", async (
 
         var docs = await docsQuery.ToListAsync(cancellationToken);
         var localResults = SearchLocal(docs, query, terms);
-
         return Results.Ok(new { query, mode = "local-keyword", results = localResults });
     }
 
@@ -386,9 +429,7 @@ app.MapGet("/search", async (
         normalizedMode = "local-keyword-fallback";
     }
 
-    var results = await SearchResultEnricher.WithContentAsync(db, hits, cancellationToken);
-
-    return Results.Ok(new { query, mode = normalizedMode, results });
+    return Results.Ok(new { query, mode = normalizedMode, index = searchOptions.Value.IndexName, results = hits });
 }).WithEntraPolicy(entraEnabled, PolicyNames.UserOrService);
 
 app.MapGet("/categories", () => Results.Ok(SupportCategory.All))
@@ -406,6 +447,16 @@ app.MapGet("/debug/idempotency", async (KnowledgeDbContext db) =>
 }).AllowAnonymous();
 
 app.Run();
+
+static IReadOnlyDictionary<string, string> BuildBlobMetadata(KnowledgeDocumentEntity entity, DateTimeOffset uploadedAt) =>
+    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["documentid"] = entity.Id,
+        ["title"] = entity.Title,
+        ["category"] = entity.Category,
+        ["filename"] = entity.FileName ?? $"{entity.Id}.bin",
+        ["uploadedat"] = uploadedAt.ToString("O")
+    };
 
 static double ScoreLocalHit(KnowledgeDocumentEntity doc, string query, IReadOnlyList<string> terms)
 {
@@ -438,7 +489,8 @@ static IReadOnlyList<RelatedDocument> SearchLocal(
             DocumentId = doc.Id,
             Title = doc.Title,
             Content = doc.Content,
-            Score = ScoreLocalHit(doc, query, terms)
+            Score = ScoreLocalHit(doc, query, terms),
+            FileName = doc.FileName
         })
         .Where(hit => hit.Score > 0)
         .OrderByDescending(hit => hit.Score)
@@ -456,60 +508,52 @@ static string HashIdempotency(string scope, string payload)
     return Convert.ToHexString(bytes);
 }
 
-static async Task MarkDocumentReadyAsync(
+static async Task WaitForChunkIndexingAsync(
     KnowledgeDocumentEntity entity,
     KnowledgeDbContext db,
-    KnowledgeSearchService search,
-    EmbeddingService embeddings,
+    AzureSearchIngestionService ingestion,
+    DocumentIngestionStatusRefresher refresher,
     AzureSearchOptions searchOptions,
     CancellationToken cancellationToken)
 {
     try
     {
-        if (searchOptions.Enabled)
+        await ingestion.EnsurePipelineAsync(cancellationToken);
+        await ingestion.TryRunIndexerAsync(cancellationToken);
+
+        var timeout = TimeSpan.FromSeconds(Math.Max(15, searchOptions.IngestionPollTimeoutSeconds));
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        IngestionPollDecision? finalDecision = null;
+
+        while (DateTimeOffset.UtcNow < deadline)
         {
-            await search.EnsureIndexAsync(cancellationToken);
-            var vector = await embeddings.CreateEmbeddingAsync($"{entity.Title}\n{entity.Content}", cancellationToken);
-            await search.UpsertDocumentsAsync([(entity, vector)], cancellationToken);
-            var searchable = await WaitForSearchVisibilityAsync(search, entity.Id, TimeSpan.FromSeconds(15), cancellationToken);
-            if (!searchable)
-                throw new TimeoutException($"Azure AI Search da nhan {entity.Id} nhung chua query duoc sau 15 giay.");
-            entity.IngestionMessage = "AI da doc xong va Azure AI Search da query duoc tai lieu.";
-        }
-        else
-        {
-            entity.IngestionMessage = "AI da doc xong; dang dung local keyword search fallback.";
+            var decision = await refresher.EvaluateDocumentAsync(entity, pollTimedOut: false, cancellationToken);
+            if (decision.Action == IngestionPollAction.Failed)
+                throw new InvalidOperationException(decision.Message);
+
+            if (decision.Action == IngestionPollAction.Ready)
+            {
+                finalDecision = decision;
+                break;
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
         }
 
-        entity.IngestionStatus = "Ready";
-        entity.IngestedAt = DateTimeOffset.UtcNow;
+        finalDecision ??= await refresher.EvaluateDocumentAsync(entity, pollTimedOut: true, cancellationToken);
+        if (finalDecision.Action == IngestionPollAction.Failed)
+            throw new InvalidOperationException(finalDecision.Message);
+
+        DocumentIngestionStatusRefresher.ApplyDecision(entity, finalDecision, searchOptions.IndexName);
     }
     catch (Exception ex)
     {
         entity.IngestionStatus = "Failed";
         entity.IngestionMessage = ex.Message;
+        entity.UpdatedAt = DateTimeOffset.UtcNow;
     }
 
-    entity.UpdatedAt = DateTimeOffset.UtcNow;
     await db.SaveChangesAsync(cancellationToken);
-}
-
-static async Task<bool> WaitForSearchVisibilityAsync(
-    KnowledgeSearchService search,
-    string documentId,
-    TimeSpan timeout,
-    CancellationToken cancellationToken)
-{
-    var deadline = DateTimeOffset.UtcNow + timeout;
-    while (DateTimeOffset.UtcNow < deadline)
-    {
-        if (await search.DocumentExistsAsync(documentId, cancellationToken))
-            return true;
-
-        await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
-    }
-
-    return await search.DocumentExistsAsync(documentId, cancellationToken);
 }
 
 static async Task EnsureDocumentColumnsAsync(KnowledgeDbContext db)
@@ -551,58 +595,85 @@ static async Task EnsureDocumentColumnsAsync(KnowledgeDbContext db)
 static async Task SeedDemoPdfAsync(
     IWebHostEnvironment environment,
     KnowledgeDbContext db,
-    PdfKnowledgeExtractor extractor,
     DocumentBlobStore blobStore,
-    KnowledgeSearchService search,
-    EmbeddingService embeddings,
+    AzureSearchIngestionService ingestion,
+    DocumentIngestionStatusRefresher ingestionRefresher,
     AzureSearchOptions searchOptions,
     ILogger logger)
 {
-    const string fileName = "device-replacement-policy.pdf";
+    if (!ingestion.IsPipelineConfigured)
+        return;
+
+    const string fileName = "long-employee-policy-handbook.pdf";
     var pdfPath = Path.GetFullPath(Path.Combine(environment.ContentRootPath, "..", "..", "test-pdfs", fileName));
     if (!File.Exists(pdfPath))
         return;
 
-    if (await db.Documents.AnyAsync(d => d.FileName == fileName || d.Title == "Device Replacement Policy Demo Seed"))
-        return;
+    var existing = await db.Documents
+        .FirstOrDefaultAsync(d => d.FileName == fileName || d.Title == "Long Employee Policy Handbook Demo Seed");
+    if (existing is not null)
+    {
+        if (!string.Equals(existing.IngestionStatus, "Ready", StringComparison.OrdinalIgnoreCase))
+        {
+            var decision = await ingestionRefresher.EvaluateDocumentAsync(existing, pollTimedOut: true);
+            DocumentIngestionStatusRefresher.ApplyDecision(existing, decision, searchOptions.IndexName);
+            await db.SaveChangesAsync();
+            logger.LogInformation(
+                "Da refresh demo seed PDF {FileName}: {Status} - {Message}",
+                fileName,
+                existing.IngestionStatus,
+                existing.IngestionMessage);
+        }
 
-    string content;
-    await using (var stream = File.OpenRead(pdfPath))
-    {
-        content = extractor.ExtractText(stream);
-    }
-    if (string.IsNullOrWhiteSpace(content))
-    {
-        logger.LogWarning("Demo PDF seed {Path} khong co text de ingest.", pdfPath);
         return;
     }
 
     var ids = await db.Documents.Select(d => d.Id).ToListAsync();
+    var uploadedAt = DateTimeOffset.UtcNow;
     var entity = new KnowledgeDocumentEntity
     {
         Id = DocumentIdGenerator.Next(ids),
-        Title = "Device Replacement Policy Demo Seed",
-        Category = SupportCategory.IT,
-        Content = content,
+        Title = "Long Employee Policy Handbook Demo Seed",
+        Category = SupportCategory.HR,
+        Content = string.Empty,
         FileName = fileName,
         ContentType = "application/pdf",
         IngestionStatus = "Processing",
-        IngestionMessage = "Demo seed PDF dang duoc dua vao knowledge index.",
-        UpdatedAt = DateTimeOffset.UtcNow
+        IngestionMessage = "Demo seed PDF dang duoc dua vao Azure indexer pipeline.",
+        UpdatedAt = uploadedAt
     };
 
-    var blobUrl = await blobStore.UploadAsync(entity.Id, entity.Content);
-    if (blobUrl is not null)
-        entity.SourceUrl = blobUrl;
+    await using (var stream = File.OpenRead(pdfPath))
+    {
+        var blobUrl = await blobStore.UploadKnowledgeFileAsync(
+            entity.Id,
+            stream,
+            fileName,
+            "application/pdf",
+            BuildBlobMetadata(entity, uploadedAt));
+        if (blobUrl is not null)
+            entity.SourceUrl = blobUrl;
+    }
 
     db.Documents.Add(entity);
     await db.SaveChangesAsync();
-    await MarkDocumentReadyAsync(entity, db, search, embeddings, searchOptions, CancellationToken.None);
+    await WaitForChunkIndexingAsync(entity, db, ingestion, ingestionRefresher, searchOptions, CancellationToken.None);
     logger.LogInformation("Da auto-seed demo PDF {FileName} thanh {DocumentId}.", fileName, entity.Id);
+}
+
+static string NormalizeKnowledgeContentType(string fileName, string? contentType)
+{
+    if (fileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)
+        && (string.IsNullOrWhiteSpace(contentType)
+            || string.Equals(contentType, "application/octet-stream", StringComparison.OrdinalIgnoreCase)))
+    {
+        return "application/pdf";
+    }
+
+    return string.IsNullOrWhiteSpace(contentType) ? "application/octet-stream" : contentType;
 }
 
 public sealed record CreateDocumentRequest(string Title, string Category, string Content, string? SourceUrl);
 
-// Knowledge-domain events - khong tham gia saga, chi broadcast cho subscriber khac (vd. analytics).
 public sealed record KnowledgeDocumentUploaded(string DocumentId);
 public sealed record KnowledgeIndexUpdated(int DocumentCount);

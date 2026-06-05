@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
+using SupportPoc.Shared.Formatting;
 using SupportPoc.Shared.Models;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
@@ -61,9 +62,9 @@ public sealed class TicketSuggestionService
 
         var history = new ChatHistory();
         history.AddSystemMessage($"""
-            Ban la tro ly ho tro noi bo. Chi tra loi dua tren tai lieu tim duoc hoac ket qua MCP tool.
-            Neu khong du thong tin, noi ro can support agent xu ly. Khong tu bia chinh sach.
-            Tai lieu noi bo da tim truoc:
+            Ban la tro ly ho tro noi bo. Chi tra loi dua tren chunk tai lieu tim duoc hoac ket qua MCP tool.
+            Neu khong co chunk phu hop hoac khong du thong tin, noi ro can support agent xu ly. Khong tu bia chinh sach.
+            Chunk tai lieu noi bo da tim truoc:
             {knowledgeContext}
 
             Cac MCP tool hien co (tu tools/list):
@@ -84,22 +85,8 @@ public sealed class TicketSuggestionService
         }
     }
 
-    private static string BuildKnowledgeContext(IReadOnlyList<RelatedDocument> related)
-    {
-        if (related.Count == 0)
-            return "Khong tim thay tai lieu lien quan trong knowledge base.";
-
-        var context = new StringBuilder();
-        foreach (var doc in related)
-        {
-            context.AppendLine($"[DOC {doc.DocumentId}] {doc.Title} (score {doc.Score:F2})");
-            if (!string.IsNullOrWhiteSpace(doc.Content))
-                context.AppendLine(doc.Content.Trim());
-            context.AppendLine();
-        }
-
-        return context.ToString();
-    }
+    private static string BuildKnowledgeContext(IReadOnlyList<RelatedDocument> related) =>
+        KnowledgeChunkContextFormatter.Format(related);
 
     public async Task<string> SuggestAnswerAsync(string question, string? category, CancellationToken cancellationToken = default)
     {

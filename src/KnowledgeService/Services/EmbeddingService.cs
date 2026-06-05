@@ -28,6 +28,15 @@ public sealed class EmbeddingService
         var client = new AzureOpenAIClient(new Uri(_options.Endpoint!), new AzureKeyCredential(_options.ApiKey!));
         var embeddingClient = client.GetEmbeddingClient(_options.EmbeddingDeployment);
         var response = await embeddingClient.GenerateEmbeddingAsync(text, cancellationToken: cancellationToken);
-        return response.Value.ToFloats().ToArray();
+        var vector = response.Value.ToFloats().ToArray();
+        if (vector.Length != _options.EmbeddingDimensions)
+        {
+            _logger.LogWarning(
+                "Embedding tra ve {Actual} dimensions, config yeu cau {Expected}.",
+                vector.Length,
+                _options.EmbeddingDimensions);
+        }
+
+        return vector;
     }
 }

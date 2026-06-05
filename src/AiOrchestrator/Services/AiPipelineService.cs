@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using Microsoft.SemanticKernel.ChatCompletion;
 using SupportPoc.AiOrchestrator.Options;
+using SupportPoc.Shared.Formatting;
 using SupportPoc.Shared.Models;
 using SupportPoc.Shared.Testing;
 
@@ -104,27 +105,15 @@ public sealed class AiPipelineService
         if (!_openAiOptions.Enabled || _chat is null)
             return BuildOfflineSuggestion(related);
 
-        var context = new StringBuilder();
-        if (related.Count == 0)
-            context.AppendLine("Khong tim thay tai lieu lien quan trong knowledge base.");
-        else
-        {
-            foreach (var doc in related)
-            {
-                context.AppendLine($"[DOC {doc.DocumentId}] {doc.Title} (score {doc.Score:F2})");
-                if (!string.IsNullOrWhiteSpace(doc.Content))
-                    context.AppendLine(doc.Content.Trim());
-                context.AppendLine();
-            }
-        }
+        var context = KnowledgeChunkContextFormatter.Format(related);
 
         var prompt = $"""
             Ban la tro ly ho tro noi bo. Viet cau tra loi goi y cho support agent.
             QUY TAC:
-            - Chi dung thong tin tu phan "Tai lieu noi bo" ben duoi.
-            - Neu co buoc xu ly trong tai lieu, liet ke ro rang (Buoc 1, Buoc 2...).
-            - Khong tu them chinh sach/buoc khong co trong tai lieu.
-            - Neu tai lieu khong du, noi ro can agent xu ly thu cong.
+            - Chi dung thong tin tu cac chunk tai lieu noi bo ben duoi.
+            - Neu co buoc xu ly trong chunk, liet ke ro rang (Buoc 1, Buoc 2...).
+            - Khong tu them chinh sach/buoc khong co trong chunk.
+            - Neu khong co chunk phu hop hoac thong tin khong du, noi ro can agent xu ly thu cong.
 
             Cau hoi nhan vien: {question}
 
