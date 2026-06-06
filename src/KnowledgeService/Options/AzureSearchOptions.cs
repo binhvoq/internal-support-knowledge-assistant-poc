@@ -13,6 +13,9 @@ public sealed class AzureSearchOptions
     public string SemanticConfigurationName { get; set; } = "knowledge-semantic";
     public int ChunkMaxPageLength { get; set; } = 1000;
     public int ChunkPageOverlapLength { get; set; } = 200;
+    public bool MmrRerankingEnabled { get; set; } = true;
+    public int MmrCandidateTop { get; set; } = 20;
+    public double MmrLambda { get; set; } = 0.5;
     public int IngestionPollTimeoutSeconds { get; set; } = 120;
     public int IngestionRefreshIntervalSeconds { get; set; } = 30;
     /// <summary>Azure Search admin REST API version for skillset index projections.</summary>

@@ -37,6 +37,9 @@ public sealed class KnowledgeChunkSearchHit
     [JsonPropertyName(KnowledgeChunkIndexFields.Content)]
     public string? Content { get; set; }
 
+    [JsonPropertyName(KnowledgeChunkIndexFields.Embedding)]
+    public IReadOnlyList<float>? Embedding { get; set; }
+
     [SimpleField(IsSortable = true, IsFilterable = true)]
     [JsonPropertyName(KnowledgeChunkIndexFields.UploadedAt)]
     public DateTimeOffset? UploadedAt { get; set; }

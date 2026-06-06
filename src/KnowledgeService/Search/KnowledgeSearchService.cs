@@ -187,14 +187,16 @@ public sealed class KnowledgeSearchService
         ValidateQueryEmbedding(embedding);
 
         var client = CreateSearchClient();
+        var candidateTop = BuildCandidateTop(top);
         var vectorQuery = new VectorizedQuery(embedding.ToArray())
         {
-            KNearestNeighborsCount = top,
+            KNearestNeighborsCount = candidateTop,
             Fields = { KnowledgeChunkIndexFields.Embedding }
         };
-        var options = BuildSearchOptions(category, top);
+        var options = BuildSearchOptions(category, candidateTop);
         options.SearchFields.Add(KnowledgeChunkIndexFields.Title);
         options.SearchFields.Add(KnowledgeChunkIndexFields.Content);
+        options.Select.Add(KnowledgeChunkIndexFields.Embedding);
         options.VectorSearch = new VectorSearchOptions { Queries = { vectorQuery } };
 
         if (_options.SemanticRankerEnabled)
@@ -206,7 +208,21 @@ public sealed class KnowledgeSearchService
             };
         }
 
-        return await ReadHitsAsync(await client.SearchAsync<KnowledgeChunkSearchHit>(query, options, cancellationToken), cancellationToken);
+        var candidates = await ReadCandidateHitsAsync(
+            await client.SearchAsync<KnowledgeChunkSearchHit>(query, options, cancellationToken),
+            cancellationToken);
+
+        if (!_options.MmrRerankingEnabled || candidates.Count <= top || candidates.Any(candidate => candidate.Embedding is null))
+            return candidates.Select(candidate => candidate.Document).Take(top).ToList();
+
+        var reranked = new MmrReranker().Select(
+            candidates,
+            embedding,
+            candidate => candidate.Embedding!,
+            top,
+            _options.MmrLambda);
+
+        return reranked.Select(candidate => candidate.Document).ToList();
     }
 
     private void ValidateQueryEmbedding(IReadOnlyList<float> embedding)
@@ -243,6 +259,15 @@ public sealed class KnowledgeSearchService
         return options;
     }
 
+    private int BuildCandidateTop(int top)
+    {
+        if (!_options.MmrRerankingEnabled)
+            return top;
+
+        var candidateTop = Math.Max(top, _options.MmrCandidateTop);
+        return Math.Clamp(candidateTop, top, 100);
+    }
+
     private static async Task<IReadOnlyList<RelatedDocument>> ReadHitsAsync(
         Response<SearchResults<KnowledgeChunkSearchHit>> response,
         CancellationToken cancellationToken)
@@ -268,6 +293,33 @@ public sealed class KnowledgeSearchService
         return results;
     }
 
+    private static async Task<IReadOnlyList<KnowledgeSearchCandidate>> ReadCandidateHitsAsync(
+        Response<SearchResults<KnowledgeChunkSearchHit>> response,
+        CancellationToken cancellationToken)
+    {
+        var results = new List<KnowledgeSearchCandidate>();
+        await foreach (var item in response.Value.GetResultsAsync())
+        {
+            var doc = item.Document;
+            if (string.IsNullOrWhiteSpace(doc.DocumentId)) continue;
+
+            var related = new RelatedDocument
+            {
+                ChunkId = doc.ChunkId,
+                ParentId = doc.ParentId,
+                DocumentId = doc.DocumentId!,
+                Title = doc.Title ?? doc.DocumentId!,
+                Content = doc.Content,
+                Score = item.Score ?? 0,
+                FileName = doc.FileName
+            };
+
+            results.Add(new KnowledgeSearchCandidate(related, doc.Embedding));
+        }
+
+        return results;
+    }
+
     private static string BuildDocumentFilter(string documentId) =>
         $"{KnowledgeChunkIndexFields.DocumentId} eq '{EscapeOData(documentId)}'";
 
@@ -278,4 +330,6 @@ public sealed class KnowledgeSearchService
 
     private SearchIndexClient CreateIndexClient() =>
         new(new Uri(_options.Endpoint!), new AzureKeyCredential(_options.ApiKey!));
+
+    private sealed record KnowledgeSearchCandidate(RelatedDocument Document, IReadOnlyList<float>? Embedding);
 }
