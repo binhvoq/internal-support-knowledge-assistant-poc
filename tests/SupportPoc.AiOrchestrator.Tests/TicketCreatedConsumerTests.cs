@@ -124,6 +124,40 @@ public sealed class TicketCreatedConsumerTests
     }
 
     [Fact]
+    public async Task Produced_job_is_resumed_without_rerunning_ai_pipeline()
+    {
+        var jobId = Guid.NewGuid();
+        await using var provider = BuildFullProvider();
+        await EnsureOrchestratorDbAsync(provider);
+        await SeedTicketAsync(provider, "TCK-RESUME", TicketStatus.New);
+        await SeedOrchestratorJobAsync(
+            provider,
+            jobId,
+            "TCK-RESUME",
+            AutoSuggestionJobStatus.Produced,
+            producedCategory: SupportCategory.IT,
+            producedSuggestion: "stored suggestion",
+            producedRelatedDocumentsJson: "[]");
+
+        var harness = provider.GetRequiredService<ITestHarness>();
+        await harness.Start();
+        await harness.Bus.Publish<ITicketCreated>(Message(jobId, "TCK-RESUME", FaultInjection.ForceAiFail));
+        Assert.True(await harness.Consumed.Any<ITicketCreated>(x => x.Context.Message.JobId == jobId));
+
+        await using var scope = provider.CreateAsyncScope();
+        var job = await scope.ServiceProvider.GetRequiredService<OrchestratorDbContext>()
+            .AutoSuggestionJobs.FindAsync(jobId);
+        Assert.Equal(AutoSuggestionJobStatus.Completed, job!.Status);
+        Assert.Null(job.FailureReason);
+        Assert.Equal("stored suggestion", job.ProducedSuggestion);
+        Assert.True(await harness.Published.Any<IAiSuggestionGenerated>(x => x.Context.Message.JobId == jobId));
+
+        var ticket = await scope.ServiceProvider.GetRequiredService<TicketDbContext>().Tickets.FindAsync("TCK-RESUME");
+        Assert.Equal(TicketStatus.Suggested, ticket!.Status);
+        Assert.Equal("stored suggestion", ticket.AiSuggestedAnswer);
+    }
+
+    [Fact]
     public async Task Skip_consider_leaves_job_produced()
     {
         var jobId = Guid.NewGuid();
@@ -209,7 +243,10 @@ public sealed class TicketCreatedConsumerTests
         ServiceProvider provider,
         Guid jobId,
         string ticketId,
-        string status)
+        string status,
+        string? producedCategory = null,
+        string? producedSuggestion = null,
+        string producedRelatedDocumentsJson = "[]")
     {
         await using var scope = provider.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<OrchestratorDbContext>();
@@ -222,6 +259,9 @@ public sealed class TicketCreatedConsumerTests
             Question = "VPN",
             Category = SupportCategory.IT,
             Status = status,
+            ProducedCategory = producedCategory,
+            ProducedSuggestion = producedSuggestion,
+            ProducedRelatedDocumentsJson = producedRelatedDocumentsJson,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         });

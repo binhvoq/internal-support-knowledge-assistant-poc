@@ -72,7 +72,7 @@ public sealed class TicketCreatedConsumer : IConsumer<ITicketCreated>
                 job.Status);
             return;
         }
-        else
+        else if (job.Status == AutoSuggestionJobStatus.Running)
         {
             job.Status = AutoSuggestionJobStatus.Running;
             job.UpdatedAt = DateTimeOffset.UtcNow;
@@ -81,17 +81,12 @@ public sealed class TicketCreatedConsumer : IConsumer<ITicketCreated>
 
         try
         {
-            var result = await _pipeline.RunAsync(
-                msg.Question,
-                msg.Category,
-                context.CancellationToken);
+            var result = job.Status == AutoSuggestionJobStatus.Produced
+                ? RestoreProducedResult(job)
+                : await ProduceAsync(job, msg, context.CancellationToken);
 
-            job.ProducedCategory = result.Category;
-            job.ProducedSuggestion = result.Suggestion;
-            job.ProducedRelatedDocumentsJson = JsonSerializer.Serialize(result.Related, JsonOptions);
-            job.Status = AutoSuggestionJobStatus.Produced;
-            job.UpdatedAt = DateTimeOffset.UtcNow;
-            await _db.SaveChangesAsync(context.CancellationToken);
+            if (job.Status != AutoSuggestionJobStatus.Produced)
+                throw new InvalidOperationException($"Auto suggestion job is not ready to consider. Status={job.Status}");
 
             if (msg.Question.Has(FaultInjection.ForceSkipConsider))
             {
@@ -154,6 +149,47 @@ public sealed class TicketCreatedConsumer : IConsumer<ITicketCreated>
         await _db.SaveChangesAsync(context.CancellationToken);
 
         await context.Publish<IAutoSuggestionFailed>(new AutoSuggestionFailed(job.JobId, job.TicketId, reason));
+    }
+
+    private async Task<AiPipelineService.PipelineResult> ProduceAsync(
+        AutoSuggestionJob job,
+        ITicketCreated msg,
+        CancellationToken cancellationToken)
+    {
+        var result = await _pipeline.RunAsync(
+            msg.Question,
+            msg.Category,
+            cancellationToken);
+
+        job.ProducedCategory = result.Category;
+        job.ProducedSuggestion = result.Suggestion;
+        job.ProducedRelatedDocumentsJson = JsonSerializer.Serialize(result.Related, JsonOptions);
+        job.Status = AutoSuggestionJobStatus.Produced;
+        job.UpdatedAt = DateTimeOffset.UtcNow;
+        await _db.SaveChangesAsync(cancellationToken);
+        return result;
+    }
+
+    private static AiPipelineService.PipelineResult RestoreProducedResult(AutoSuggestionJob job)
+    {
+        if (string.IsNullOrWhiteSpace(job.ProducedCategory))
+            throw new InvalidOperationException("Produced job is missing category.");
+        if (string.IsNullOrWhiteSpace(job.ProducedSuggestion))
+            throw new InvalidOperationException("Produced job is missing suggestion.");
+
+        IReadOnlyList<RelatedDocument> related;
+        try
+        {
+            related = JsonSerializer.Deserialize<IReadOnlyList<RelatedDocument>>(
+                job.ProducedRelatedDocumentsJson,
+                JsonOptions) ?? [];
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException("Produced job has invalid related documents JSON.", ex);
+        }
+
+        return new AiPipelineService.PipelineResult(job.ProducedCategory, job.ProducedSuggestion, related);
     }
 }
 
