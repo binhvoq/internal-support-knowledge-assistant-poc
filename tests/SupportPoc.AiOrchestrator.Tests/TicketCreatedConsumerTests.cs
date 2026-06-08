@@ -167,6 +167,7 @@ public sealed class TicketCreatedConsumerTests
             .AddSingleton(Microsoft.Extensions.Options.Options.Create(new ServiceEndpointsOptions { KnowledgeService = "http://127.0.0.1:1" }))
             .AddHttpClient()
             .AddSingleton<KnowledgeSearchClient>()
+            .AddSingleton<IKnowledgeSearchClient>(sp => sp.GetRequiredService<KnowledgeSearchClient>())
             .AddScoped<IChatCompletionServiceAccessor>()
             .AddScoped<AiPipelineService>();
 

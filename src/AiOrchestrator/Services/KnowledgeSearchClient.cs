@@ -6,7 +6,15 @@ using SupportPoc.Shared.Models;
 
 namespace SupportPoc.AiOrchestrator.Services;
 
-public sealed class KnowledgeSearchClient
+public interface IKnowledgeSearchClient
+{
+    Task<IReadOnlyList<RelatedDocument>> SearchAsync(
+        string query,
+        string? category,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed class KnowledgeSearchClient : IKnowledgeSearchClient
 {
     public const string HttpClientName = "knowledge-service";
 

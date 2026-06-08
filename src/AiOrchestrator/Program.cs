@@ -49,6 +49,7 @@ builder.Services.AddSingleton<McpToolGateway>();
 builder.Services.AddSingleton<McpDynamicPluginLoader>();
 builder.Services.AddSingleton<McpToolAccessService>();
 builder.Services.AddSingleton<KnowledgeSearchClient>();
+builder.Services.AddSingleton<IKnowledgeSearchClient>(sp => sp.GetRequiredService<KnowledgeSearchClient>());
 builder.Services.AddScoped<AiPipelineService>();
 builder.Services.AddScoped<IChatCompletionServiceAccessor>();
 builder.Services.AddScoped<TicketSuggestionService>();

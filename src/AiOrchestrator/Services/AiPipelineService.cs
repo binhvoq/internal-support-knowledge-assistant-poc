@@ -12,13 +12,13 @@ namespace SupportPoc.AiOrchestrator.Services;
 // Classify + Search + Generate — chi dung trong proposal pipeline (TicketCreatedConsumer).
 public sealed class AiPipelineService
 {
-    private readonly KnowledgeSearchClient _knowledge;
+    private readonly IKnowledgeSearchClient _knowledge;
     private readonly IChatCompletionService? _chat;
     private readonly AzureOpenAIOptions _openAiOptions;
     private readonly ILogger<AiPipelineService> _logger;
 
     public AiPipelineService(
-        KnowledgeSearchClient knowledge,
+        IKnowledgeSearchClient knowledge,
         IChatCompletionServiceAccessor chatAccessor,
         IOptions<AzureOpenAIOptions> openAiOptions,
         ILogger<AiPipelineService> logger)
@@ -46,7 +46,7 @@ public sealed class AiPipelineService
         if (string.IsNullOrWhiteSpace(category) || category == SupportCategory.Other)
             category = await ClassifyAsync(question, cancellationToken) ?? SupportCategory.Other;
 
-        var related = await SearchKnowledgeAsync(question, category, cancellationToken);
+        var related = await SearchKnowledgeAsync(question, null, cancellationToken);
         var suggestion = await GenerateAsync(question, related, cancellationToken);
         return new PipelineResult(category, suggestion, related);
     }
