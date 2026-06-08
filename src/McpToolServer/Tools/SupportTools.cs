@@ -109,7 +109,7 @@ public sealed class SupportTools(IHttpClientFactory httpClientFactory)
         [Description("Category: IT, HR, Finance, Other")] string? category = null,
         CancellationToken cancellationToken = default)
     {
-        var url = $"/search?query={Uri.EscapeDataString(query)}&mode=hybrid&rerank=mmr";
+        var url = $"/search?query={Uri.EscapeDataString(query)}&mode=hybrid&rerank=none";
         if (!string.IsNullOrWhiteSpace(category))
             url += $"&category={Uri.EscapeDataString(category)}";
         var response = await KnowledgeClient.GetAsync(url, cancellationToken);

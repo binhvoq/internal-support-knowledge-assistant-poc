@@ -398,7 +398,7 @@ app.MapGet("/search", async (
     if (!TryParseSearchMode(mode, out var searchMode))
         return Results.BadRequest(new { error = "mode chi ho tro: keyword, vector, hybrid." });
 
-    if (!TryParseRerankMethod(rerank, searchOptions.Value, out var rerankMethod))
+    if (!TryParseRerankMethod(rerank, out var rerankMethod))
         return Results.BadRequest(new { error = "rerank chi ho tro: none, mmr, semantic." });
 
     if (searchMode == KnowledgeSearchMode.Vector && rerankMethod == KnowledgeRerankMethod.AzureSemantic)
@@ -504,11 +504,10 @@ static bool TryParseSearchMode(string? raw, out KnowledgeSearchMode mode)
     }
 }
 
-static bool TryParseRerankMethod(string? raw, AzureSearchOptions options, out KnowledgeRerankMethod rerankMethod)
+static bool TryParseRerankMethod(string? raw, out KnowledgeRerankMethod rerankMethod)
 {
-    rerankMethod = options.MmrRerankingEnabled
-        ? KnowledgeRerankMethod.Mmr
-        : KnowledgeRerankMethod.None;
+    // Default RAG context retrieval favors relevance; MMR remains opt-in for diversity-oriented search.
+    rerankMethod = KnowledgeRerankMethod.None;
 
     if (string.IsNullOrWhiteSpace(raw))
         return true;
