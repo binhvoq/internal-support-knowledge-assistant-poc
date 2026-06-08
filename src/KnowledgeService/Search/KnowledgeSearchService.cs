@@ -150,56 +150,38 @@ public sealed class KnowledgeSearchService
     }
 
     public async Task<IReadOnlyList<RelatedDocument>> SearchAsync(
-        string query, string? category, int top = 5, CancellationToken cancellationToken = default)
+        string query,
+        IReadOnlyList<float>? embedding,
+        string? category,
+        KnowledgeSearchMode mode,
+        KnowledgeRerankMethod rerankMethod,
+        int top = 5,
+        CancellationToken cancellationToken = default)
     {
         if (!_options.Enabled) return [];
+        if (top <= 0) return [];
 
-        var client = CreateSearchClient();
-        var options = BuildSearchOptions(category, top);
-        options.SearchFields.Add(KnowledgeChunkIndexFields.Title);
-        options.SearchFields.Add(KnowledgeChunkIndexFields.Content);
-
-        return await ReadHitsAsync(await client.SearchAsync<KnowledgeChunkSearchHit>(query, options, cancellationToken), cancellationToken);
-    }
-
-    public async Task<IReadOnlyList<RelatedDocument>> VectorSearchAsync(
-        IReadOnlyList<float> embedding, string? category, int top = 5, CancellationToken cancellationToken = default)
-    {
-        if (!_options.Enabled) return [];
-        ValidateQueryEmbedding(embedding);
-
-        var client = CreateSearchClient();
-        var vectorQuery = new VectorizedQuery(embedding.ToArray())
+        if (mode is KnowledgeSearchMode.Vector or KnowledgeSearchMode.Hybrid || rerankMethod == KnowledgeRerankMethod.Mmr)
         {
-            KNearestNeighborsCount = top,
-            Fields = { KnowledgeChunkIndexFields.Embedding }
-        };
-        var options = BuildSearchOptions(category, top);
-        options.VectorSearch = new VectorSearchOptions { Queries = { vectorQuery } };
+            if (embedding is null)
+                throw new InvalidOperationException($"{mode} search voi {rerankMethod} rerank can query embedding.");
 
-        return await ReadHitsAsync(await client.SearchAsync<KnowledgeChunkSearchHit>(null, options, cancellationToken), cancellationToken);
-    }
+            ValidateQueryEmbedding(embedding);
+        }
 
-    public async Task<IReadOnlyList<RelatedDocument>> HybridSearchAsync(
-        string query, IReadOnlyList<float> embedding, string? category, int top = 5, CancellationToken cancellationToken = default)
-    {
-        if (!_options.Enabled) return [];
-        ValidateQueryEmbedding(embedding);
+        if (rerankMethod == KnowledgeRerankMethod.AzureSemantic && mode == KnowledgeSearchMode.Vector)
+            throw new InvalidOperationException("Azure Semantic Ranker can text query; khong ho tro vector-only mode.");
+
+        if (rerankMethod == KnowledgeRerankMethod.AzureSemantic && !_options.SemanticRankerEnabled)
+            throw new InvalidOperationException("Azure Semantic Ranker chua duoc enable trong config.");
 
         var client = CreateSearchClient();
-        var candidateTop = BuildCandidateTop(top);
-        var vectorQuery = new VectorizedQuery(embedding.ToArray())
-        {
-            KNearestNeighborsCount = candidateTop,
-            Fields = { KnowledgeChunkIndexFields.Embedding }
-        };
+        var useMmr = rerankMethod == KnowledgeRerankMethod.Mmr;
+        var candidateTop = useMmr ? BuildCandidateTop(top) : top;
         var options = BuildSearchOptions(category, candidateTop);
-        options.SearchFields.Add(KnowledgeChunkIndexFields.Title);
-        options.SearchFields.Add(KnowledgeChunkIndexFields.Content);
-        options.Select.Add(KnowledgeChunkIndexFields.Embedding);
-        options.VectorSearch = new VectorSearchOptions { Queries = { vectorQuery } };
+        var searchText = ConfigureSearchOptions(options, query, embedding, mode, candidateTop, useMmr);
 
-        if (_options.SemanticRankerEnabled)
+        if (rerankMethod == KnowledgeRerankMethod.AzureSemantic)
         {
             options.QueryType = SearchQueryType.Semantic;
             options.SemanticSearch = new SemanticSearchOptions
@@ -209,15 +191,25 @@ public sealed class KnowledgeSearchService
         }
 
         var candidates = await ReadCandidateHitsAsync(
-            await client.SearchAsync<KnowledgeChunkSearchHit>(query, options, cancellationToken),
+            await client.SearchAsync<KnowledgeChunkSearchHit>(searchText, options, cancellationToken),
             cancellationToken);
 
-        if (!_options.MmrRerankingEnabled || candidates.Count <= top || candidates.Any(candidate => candidate.Embedding is null))
+        if (!useMmr || candidates.Count <= top)
             return candidates.Select(candidate => candidate.Document).Take(top).ToList();
+
+        var missingEmbeddingCount = candidates.Count(candidate => candidate.Embedding is null);
+        if (missingEmbeddingCount > 0)
+        {
+            _logger.LogWarning(
+                "Bo qua MMR rerank vi {MissingEmbeddingCount}/{CandidateCount} candidate thieu embedding.",
+                missingEmbeddingCount,
+                candidates.Count);
+            return candidates.Select(candidate => candidate.Document).Take(top).ToList();
+        }
 
         var reranked = new MmrReranker().Select(
             candidates,
-            embedding,
+            embedding!,
             candidate => candidate.Embedding!,
             top,
             _options.MmrLambda);
@@ -268,29 +260,57 @@ public sealed class KnowledgeSearchService
         return Math.Clamp(candidateTop, top, 100);
     }
 
-    private static async Task<IReadOnlyList<RelatedDocument>> ReadHitsAsync(
-        Response<SearchResults<KnowledgeChunkSearchHit>> response,
-        CancellationToken cancellationToken)
+    private static string? ConfigureSearchOptions(
+        SearchOptions options,
+        string query,
+        IReadOnlyList<float>? embedding,
+        KnowledgeSearchMode mode,
+        int candidateTop,
+        bool includeEmbedding)
     {
-        var results = new List<RelatedDocument>();
-        await foreach (var item in response.Value.GetResultsAsync())
+        if (includeEmbedding)
+            options.Select.Add(KnowledgeChunkIndexFields.Embedding);
+
+        switch (mode)
         {
-            var doc = item.Document;
-            if (string.IsNullOrWhiteSpace(doc.DocumentId)) continue;
+            case KnowledgeSearchMode.Keyword:
+                options.SearchFields.Add(KnowledgeChunkIndexFields.Title);
+                options.SearchFields.Add(KnowledgeChunkIndexFields.Content);
+                return query;
 
-            results.Add(new RelatedDocument
-            {
-                ChunkId = doc.ChunkId,
-                ParentId = doc.ParentId,
-                DocumentId = doc.DocumentId!,
-                Title = doc.Title ?? doc.DocumentId!,
-                Content = doc.Content,
-                Score = item.Score ?? 0,
-                FileName = doc.FileName
-            });
+            case KnowledgeSearchMode.Vector:
+                options.VectorSearch = new VectorSearchOptions
+                {
+                    Queries =
+                    {
+                        new VectorizedQuery(embedding!.ToArray())
+                        {
+                            KNearestNeighborsCount = candidateTop,
+                            Fields = { KnowledgeChunkIndexFields.Embedding }
+                        }
+                    }
+                };
+                return null;
+
+            case KnowledgeSearchMode.Hybrid:
+                options.SearchFields.Add(KnowledgeChunkIndexFields.Title);
+                options.SearchFields.Add(KnowledgeChunkIndexFields.Content);
+                options.VectorSearch = new VectorSearchOptions
+                {
+                    Queries =
+                    {
+                        new VectorizedQuery(embedding!.ToArray())
+                        {
+                            KNearestNeighborsCount = candidateTop,
+                            Fields = { KnowledgeChunkIndexFields.Embedding }
+                        }
+                    }
+                };
+                return query;
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unsupported search mode.");
         }
-
-        return results;
     }
 
     private static async Task<IReadOnlyList<KnowledgeSearchCandidate>> ReadCandidateHitsAsync(

@@ -385,6 +385,7 @@ app.MapGet("/search", async (
     string query,
     string? category,
     string? mode,
+    string? rerank,
     IOptions<AzureSearchOptions> searchOptions,
     KnowledgeSearchService search,
     EmbeddingService embeddings,
@@ -394,7 +395,20 @@ app.MapGet("/search", async (
     if (string.IsNullOrWhiteSpace(query))
         return Results.BadRequest(new { error = "query la bat buoc." });
 
-    var normalizedMode = (mode ?? "hybrid").ToLowerInvariant();
+    if (!TryParseSearchMode(mode, out var searchMode))
+        return Results.BadRequest(new { error = "mode chi ho tro: keyword, vector, hybrid." });
+
+    if (!TryParseRerankMethod(rerank, searchOptions.Value, out var rerankMethod))
+        return Results.BadRequest(new { error = "rerank chi ho tro: none, mmr, semantic." });
+
+    if (searchMode == KnowledgeSearchMode.Vector && rerankMethod == KnowledgeRerankMethod.AzureSemantic)
+        return Results.BadRequest(new { error = "rerank=semantic khong ho tro mode=vector; dung mode=keyword hoac mode=hybrid." });
+
+    if (rerankMethod == KnowledgeRerankMethod.AzureSemantic && !searchOptions.Value.SemanticRankerEnabled)
+        return Results.BadRequest(new { error = "Azure Semantic Ranker chua duoc enable trong config." });
+
+    var normalizedMode = FormatSearchMode(searchMode);
+    var normalizedRerank = FormatRerankMethod(rerankMethod);
     var terms = query.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     if (!searchOptions.Value.Enabled)
     {
@@ -404,20 +418,39 @@ app.MapGet("/search", async (
 
         var docs = await docsQuery.ToListAsync(cancellationToken);
         var localResults = SearchLocal(docs, query, terms);
-        return Results.Ok(new { query, mode = "local-keyword", results = localResults });
+        return Results.Ok(new { query, mode = "local-keyword", rerank = "none", results = localResults });
     }
 
     IReadOnlyList<RelatedDocument> hits;
     try
     {
-        var embedding = await embeddings.CreateEmbeddingAsync(query, cancellationToken);
-        hits = normalizedMode switch
+        var needsEmbedding = searchMode != KnowledgeSearchMode.Keyword || rerankMethod == KnowledgeRerankMethod.Mmr;
+        var embedding = needsEmbedding
+            ? await embeddings.CreateEmbeddingAsync(query, cancellationToken)
+            : null;
+
+        if (needsEmbedding && embedding is not { Count: > 0 })
         {
-            "vector" when embedding is { Count: > 0 } => await search.VectorSearchAsync(embedding, category, cancellationToken: cancellationToken),
-            "keyword" => await search.SearchAsync(query, category, cancellationToken: cancellationToken),
-            _ when embedding is { Count: > 0 } => await search.HybridSearchAsync(query, embedding, category, cancellationToken: cancellationToken),
-            _ => await search.SearchAsync(query, category, cancellationToken: cancellationToken)
-        };
+            hits = await search.SearchAsync(
+                query,
+                null,
+                category,
+                KnowledgeSearchMode.Keyword,
+                KnowledgeRerankMethod.None,
+                cancellationToken: cancellationToken);
+            normalizedMode = "keyword";
+            normalizedRerank = "none";
+        }
+        else
+        {
+            hits = await search.SearchAsync(
+                query,
+                embedding,
+                category,
+                searchMode,
+                rerankMethod,
+                cancellationToken: cancellationToken);
+        }
     }
     catch
     {
@@ -427,9 +460,10 @@ app.MapGet("/search", async (
         var docs = await docsQuery.ToListAsync(cancellationToken);
         hits = SearchLocal(docs, query, terms);
         normalizedMode = "local-keyword-fallback";
+        normalizedRerank = "none";
     }
 
-    return Results.Ok(new { query, mode = normalizedMode, index = searchOptions.Value.IndexName, results = hits });
+    return Results.Ok(new { query, mode = normalizedMode, rerank = normalizedRerank, index = searchOptions.Value.IndexName, results = hits });
 }).WithEntraPolicy(entraEnabled, PolicyNames.UserOrService);
 
 app.MapGet("/categories", () => Results.Ok(SupportCategory.All))
@@ -447,6 +481,74 @@ app.MapGet("/debug/idempotency", async (KnowledgeDbContext db) =>
 }).AllowAnonymous();
 
 app.Run();
+
+static bool TryParseSearchMode(string? raw, out KnowledgeSearchMode mode)
+{
+    mode = KnowledgeSearchMode.Hybrid;
+    if (string.IsNullOrWhiteSpace(raw))
+        return true;
+
+    switch (raw.Trim().ToLowerInvariant())
+    {
+        case "keyword":
+            mode = KnowledgeSearchMode.Keyword;
+            return true;
+        case "vector":
+            mode = KnowledgeSearchMode.Vector;
+            return true;
+        case "hybrid":
+            mode = KnowledgeSearchMode.Hybrid;
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool TryParseRerankMethod(string? raw, AzureSearchOptions options, out KnowledgeRerankMethod rerankMethod)
+{
+    rerankMethod = options.MmrRerankingEnabled
+        ? KnowledgeRerankMethod.Mmr
+        : KnowledgeRerankMethod.None;
+
+    if (string.IsNullOrWhiteSpace(raw))
+        return true;
+
+    switch (raw.Trim().ToLowerInvariant())
+    {
+        case "none":
+        case "off":
+            rerankMethod = KnowledgeRerankMethod.None;
+            return true;
+        case "mmr":
+            rerankMethod = KnowledgeRerankMethod.Mmr;
+            return true;
+        case "semantic":
+        case "azuresemantic":
+        case "azure-semantic":
+            rerankMethod = KnowledgeRerankMethod.AzureSemantic;
+            return true;
+        default:
+            return false;
+    }
+}
+
+static string FormatSearchMode(KnowledgeSearchMode mode) =>
+    mode switch
+    {
+        KnowledgeSearchMode.Keyword => "keyword",
+        KnowledgeSearchMode.Vector => "vector",
+        KnowledgeSearchMode.Hybrid => "hybrid",
+        _ => mode.ToString()
+    };
+
+static string FormatRerankMethod(KnowledgeRerankMethod rerankMethod) =>
+    rerankMethod switch
+    {
+        KnowledgeRerankMethod.None => "none",
+        KnowledgeRerankMethod.Mmr => "mmr",
+        KnowledgeRerankMethod.AzureSemantic => "semantic",
+        _ => rerankMethod.ToString()
+    };
 
 static IReadOnlyDictionary<string, string> BuildBlobMetadata(KnowledgeDocumentEntity entity, DateTimeOffset uploadedAt) =>
     new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)

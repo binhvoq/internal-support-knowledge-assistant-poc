@@ -26,7 +26,7 @@ public sealed class KnowledgeSearchClient
         string? category,
         CancellationToken cancellationToken = default)
     {
-        var url = $"{_endpoints.KnowledgeService.TrimEnd('/')}/search?query={Uri.EscapeDataString(query)}&mode=hybrid";
+        var url = $"{_endpoints.KnowledgeService.TrimEnd('/')}/search?query={Uri.EscapeDataString(query)}&mode=hybrid&rerank=mmr";
         if (!string.IsNullOrWhiteSpace(category) && category != SupportCategory.Other)
             url += $"&category={Uri.EscapeDataString(category)}";
 
