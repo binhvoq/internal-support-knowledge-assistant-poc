@@ -1,11 +1,12 @@
 using MassTransit;
 using Microsoft.EntityFrameworkCore;
+using SupportPoc.AiOrchestrator.Saga;
 
 namespace SupportPoc.AiOrchestrator.Data;
 
 public sealed class OrchestratorDbContext(DbContextOptions<OrchestratorDbContext> options) : DbContext(options)
 {
-    public DbSet<AutoSuggestionJob> AutoSuggestionJobs => Set<AutoSuggestionJob>();
+    public DbSet<TicketSuggestionSaga> TicketSuggestionSagas => Set<TicketSuggestionSaga>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -13,13 +14,14 @@ public sealed class OrchestratorDbContext(DbContextOptions<OrchestratorDbContext
         modelBuilder.AddOutboxMessageEntity();
         modelBuilder.AddOutboxStateEntity();
 
-        modelBuilder.Entity<AutoSuggestionJob>(entity =>
+        modelBuilder.Entity<TicketSuggestionSaga>(entity =>
         {
-            entity.HasKey(x => x.JobId);
+            entity.HasKey(x => x.CorrelationId);
+            entity.Property(x => x.CurrentState).HasMaxLength(64);
             entity.Property(x => x.TicketId).HasMaxLength(32);
             entity.Property(x => x.EmployeeId).HasMaxLength(64);
-            entity.Property(x => x.Category).HasMaxLength(32);
-            entity.Property(x => x.Status).HasMaxLength(32);
+            entity.Property(x => x.OriginalCategory).HasMaxLength(32);
+            entity.Property(x => x.RowVersion).IsRowVersion();
             entity.HasIndex(x => x.TicketId);
         });
     }

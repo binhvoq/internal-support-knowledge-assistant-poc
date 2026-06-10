@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="SupportPoc.TicketService.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="MassTransit" Version="8.5.9" />
     <PackageReference Include="MassTransit.Azure.ServiceBus.Core" Version="8.5.9" />
     <PackageReference Include="MassTransit.EntityFrameworkCore" Version="8.5.9" />

@@ -80,16 +80,17 @@ sleep 2
 import sqlite3, sys
 con = sqlite3.connect(sys.argv[1])
 tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-for t in ("AutoSuggestionJobs", "InboxState", "OutboxMessage", "OutboxState"):
+for t in ("TicketSuggestionSagas", "InboxState", "OutboxMessage", "OutboxState"):
     assert t in tables, tables
-cols = [r[1] for r in con.execute("PRAGMA table_info(AutoSuggestionJobs)")]
-for c in ("JobId", "TicketId", "Status"):
+assert "AutoSuggestionJobs" not in tables, tables
+cols = [r[1] for r in con.execute("PRAGMA table_info(TicketSuggestionSagas)")]
+for c in ("CorrelationId", "TicketId", "JobId", "CurrentState"):
     assert c in cols, cols
-idx = list(con.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='AutoSuggestionJobs'"))
-print("tables ok, job columns:", len(cols), "indexes:", idx)
+idx = list(con.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='TicketSuggestionSagas'"))
+print("tables ok, saga columns:", len(cols), "indexes:", idx)
 con.close()
 PY
-ok "schema: AutoSuggestionJobs + MassTransit inbox/outbox after restart"
+ok "schema: TicketSuggestionSagas + MassTransit inbox/outbox after restart"
 
 TICKET=$(post_ticket "VPN legacy migration E2E")
 ID=$("$PYTHON" -c "import json,sys; print(json.load(sys.stdin)['id'])" <<<"$TICKET")
@@ -105,20 +106,20 @@ done
 if [[ "$st" == "Suggested" && "$js" == "Completed" ]]; then
   ok "legacy DB: ticket $ID Suggested + job Completed"
 else
-  bad "legacy DB: ticket=$st job=$js"
-  "$CURL" -sf "http://localhost:5003/debug/auto-suggestion-jobs?ticketId=$ID" 2>/dev/null | head -c 600 || true
+  bad "legacy DB: ticket=$st saga=$js"
+  "$CURL" -sf "http://localhost:5003/debug/saga-instances?ticketId=$ID" 2>/dev/null | head -c 600 || true
 fi
 
 # --- 2. Poison / DLQ ---
 log "Poison/DLQ (__POISON_AI__)"
-DLQ_BEFORE=$("$CURL" -sf "http://localhost:5003/debug/dlq?queue=auto-suggestion-ticket-created")
+DLQ_BEFORE=$("$CURL" -sf "http://localhost:5003/debug/dlq?queue=generate-suggestion-requested")
 FAILED_BEFORE=$("$PYTHON" -c "import json,sys; print(json.load(sys.stdin).get('totalFailedMessages',0))" <<<"$DLQ_BEFORE")
 echo "  dlq totalFailedMessages before=$FAILED_BEFORE"
 
 RG="${RG:-rg-support-poc}"
 NS=$(python -c "import json,re; c=json.load(open('$CFG')); m=re.search(r'sb://([^/;]+)', c['ServiceBus']['ConnectionString']); print(m.group(1) if m else '')" 2>/dev/null || echo "")
 if [[ -n "$NS" ]]; then
-  az servicebus queue show -g "$RG" --namespace-name "$NS" -n auto-suggestion-ticket-created \
+  az servicebus queue show -g "$RG" --namespace-name "$NS" -n generate-suggestion-requested \
     --query "{active:countDetails.activeMessageCount,dead:countDetails.deadLetterMessageCount}" -o json 2>/dev/null | tee /tmp/sb-before.json || true
 fi
 
@@ -133,7 +134,7 @@ for round in $(seq 1 18); do
   [[ "$hc" != "200" ]] && HEALTH_OK=false
   d=$("$CURL" -sf "http://localhost:5001/tickets/$PID" ${TOKEN:+-H "Authorization: Bearer $TOKEN"})
   st=$("$PYTHON" -c "import json,sys; print(json.load(sys.stdin)['status'])" <<<"$d")
-  DLQ=$("$CURL" -sf "http://localhost:5003/debug/dlq?queue=auto-suggestion-ticket-created")
+  DLQ=$("$CURL" -sf "http://localhost:5003/debug/dlq?queue=generate-suggestion-requested")
   FAILED=$("$PYTHON" -c "import json,sys; print(json.load(sys.stdin).get('totalFailedMessages',0))" <<<"$DLQ")
   echo "  wait ${round}x10s: health=$hc ticket=$st dlqFailed=$FAILED (delta=$((FAILED - FAILED_BEFORE)))"
   if [[ "$st" == "New" && "$FAILED" -gt "$FAILED_BEFORE" ]]; then
@@ -146,7 +147,7 @@ if [[ "$FAILED" -gt "$FAILED_BEFORE" ]]; then ok "dlq totalFailedMessages increa
 if [[ "$HEALTH_OK" == "true" ]]; then ok "AiOrchestrator health OK during poison"; else bad "orchestrator unhealthy"; fi
 
 if [[ -n "$NS" ]]; then
-  az servicebus queue show -g "$RG" --namespace-name "$NS" -n auto-suggestion-ticket-created \
+  az servicebus queue show -g "$RG" --namespace-name "$NS" -n generate-suggestion-requested \
     --query "{active:countDetails.activeMessageCount,dead:countDetails.deadLetterMessageCount}" -o json 2>/dev/null | tee /tmp/sb-after.json || true
   ACTIVE=$(python -c "import json; print(json.load(open('/tmp/sb-after.json'))['active'])" 2>/dev/null || echo "?")
   if [[ "$ACTIVE" == "0" || "$ACTIVE" -lt 5 ]]; then

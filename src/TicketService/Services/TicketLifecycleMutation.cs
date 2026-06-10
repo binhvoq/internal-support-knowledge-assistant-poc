@@ -34,6 +34,7 @@ public static class TicketLifecycleMutation
             ticket.FinalAnswer = null;
 
         ticket.UpdatedAt = DateTimeOffset.UtcNow;
+        ticket.Version++;
         error = null;
         return true;
     }

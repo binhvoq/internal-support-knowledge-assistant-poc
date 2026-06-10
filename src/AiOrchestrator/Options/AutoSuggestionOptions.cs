@@ -4,5 +4,7 @@ public sealed class AutoSuggestionOptions
 {
     public const string SectionName = "AutoSuggestion";
 
-    public int ConsiderRequestTimeoutSeconds { get; set; } = 30;
+    public int StepTimeoutSeconds { get; set; } = 120;
+    public int ProposeRequestTimeoutSeconds { get; set; } = 30;
+    public int MaxGenerationRetries { get; set; } = 2;
 }

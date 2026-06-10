@@ -11,6 +11,7 @@ public sealed class TicketEntity
     public string? AiSuggestedAnswer { get; set; }
     public string? FinalAnswer { get; set; }
     public string RelatedDocumentsJson { get; set; } = "[]";
+    public long Version { get; set; } = 1;
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 }

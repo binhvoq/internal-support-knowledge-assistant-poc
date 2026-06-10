@@ -12,7 +12,7 @@ using SupportPoc.AiOrchestrator.Options;
 
 namespace SupportPoc.AiOrchestrator.Services;
 
-// HTTP /ai/* only — auto suggestion orchestration is TicketCreatedConsumer + proposal pipeline.
+// HTTP /ai/* only — auto suggestion orchestration is TicketSuggestionStateMachine saga (not this class).
 public sealed class TicketSuggestionService
 {
     private readonly AiPipelineService _pipeline;

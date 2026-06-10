@@ -27,10 +27,10 @@ Chi tiết thiết kế: [`docs/poc-ai-dual-flow.md`](../docs/poc-ai-dual-flow.m
 
 ## Case 3 — Agent resolve khi auto-suggestion đang chạy (BC-03)
 
-1. Tạo ticket mới → ticket ở **New**, UI detail có thể hiện *Đang tạo gợi ý…* (job `Running`/`Produced`).
+1. Tạo ticket mới → ticket ở **New**, UI detail có thể hiện *Đang tạo gợi ý…* (saga `GeneratingSuggestion` / `ApplyingSuggestion`).
 2. Agent mở **Ticket Detail** ngay → **Resolve** với final answer.
-3. Đợi vài giây (pipeline có thể vẫn đang `ConsiderAutoSuggestion`).
-4. **Kỳ vọng:** Status vẫn **Resolved**, không bị ghi đè thành **Suggested** (`ConsiderAutoSuggestion` reject → job `Discarded`).
+3. Đợi vài giây (saga có thể vẫn đang propose `ProposeTicketSuggestion`).
+4. **Kỳ vọng:** Status vẫn **Resolved**, không bị ghi đè thành **Suggested** (`ProposeTicketSuggestion` reject → saga `Discarded`).
 
 ---
 
@@ -38,7 +38,7 @@ Chi tiết thiết kế: [`docs/poc-ai-dual-flow.md`](../docs/poc-ai-dual-flow.m
 
 | Thuật ngữ UI | Ý nghĩa |
 |--------------|---------|
-| Auto suggestion | Proposal pipeline sau `TicketCreated` (service account) |
+| Auto suggestion | Saga orchestration sau `TicketCreated` → AI worker → `ProposeTicketSuggestion` |
 | Support Copilot | Chat tương tác theo role user |
 
 Smoke nhanh (không Entra): `bash scripts/smoke-test.sh`

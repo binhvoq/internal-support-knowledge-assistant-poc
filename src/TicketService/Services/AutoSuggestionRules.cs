@@ -3,12 +3,13 @@ using SupportPoc.TicketService.Data;
 
 namespace SupportPoc.TicketService.Services;
 
-/// <summary>Ticket aggregate quyet nhan hay bo proposal — khong dung epoch/saga metadata.</summary>
+/// <summary>Ticket aggregate quyet nhan hay bo proposal — saga khong duoc ep lifecycle.</summary>
 public static class AutoSuggestionRules
 {
-    public static bool CanAccept(TicketEntity ticket) => GetRejectReason(ticket) is null;
+    public static bool CanAccept(TicketEntity ticket, long? expectedVersion = null) =>
+        GetRejectReason(ticket, expectedVersion) is null;
 
-    public static string? GetRejectReason(TicketEntity ticket)
+    public static string? GetRejectReason(TicketEntity ticket, long? expectedVersion = null)
     {
         if (!string.IsNullOrWhiteSpace(ticket.FinalAnswer))
             return "Ticket already has a final answer.";
@@ -22,10 +23,9 @@ public static class AutoSuggestionRules
         if (ticket.Status != TicketStatus.New)
             return $"Ticket status is {ticket.Status}; only New tickets accept auto suggestion.";
 
+        if (expectedVersion is not null && ticket.Version != expectedVersion)
+            return "Ticket version mismatch (stale command).";
+
         return null;
     }
-
-    /// <summary>Idempotent replay: da apply suggestion cho cung job (caller truyen jobId neu can mo rong).</summary>
-    public static bool IsAlreadyAccepted(TicketEntity ticket) =>
-        ticket.Status == TicketStatus.Suggested && !string.IsNullOrWhiteSpace(ticket.AiSuggestedAnswer);
 }

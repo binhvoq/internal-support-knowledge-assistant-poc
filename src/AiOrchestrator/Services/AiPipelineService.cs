@@ -9,7 +9,7 @@ using SupportPoc.Shared.Testing;
 
 namespace SupportPoc.AiOrchestrator.Services;
 
-// Classify + Search + Generate — chi dung trong proposal pipeline (TicketCreatedConsumer).
+// Classify + Search + Generate — dung boi GenerateSuggestionRequestedConsumer (saga AI worker).
 public sealed class AiPipelineService
 {
     private readonly IKnowledgeSearchClient _knowledge;

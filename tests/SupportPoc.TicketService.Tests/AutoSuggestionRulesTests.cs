@@ -31,6 +31,15 @@ public sealed class AutoSuggestionRulesTests
         Assert.False(AutoSuggestionRules.CanAccept(ticket));
     }
 
+    [Fact]
+    public void Rejects_when_version_mismatch()
+    {
+        var ticket = NewTicket(TicketStatus.New);
+        ticket.Version = 5;
+        Assert.False(AutoSuggestionRules.CanAccept(ticket, expectedVersion: 1));
+        Assert.Contains("version mismatch", AutoSuggestionRules.GetRejectReason(ticket, 1), StringComparison.OrdinalIgnoreCase);
+    }
+
     private static TicketEntity NewTicket(string status) => new()
     {
         Id = "TCK-1",

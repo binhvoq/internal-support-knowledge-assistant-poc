@@ -8,10 +8,12 @@ using SupportPoc.AiOrchestrator.Consumers;
 using SupportPoc.AiOrchestrator.Data;
 using SupportPoc.AiOrchestrator.Mcp;
 using SupportPoc.AiOrchestrator.Options;
+using SupportPoc.AiOrchestrator.Saga;
 using SupportPoc.AiOrchestrator.Services;
 using SupportPoc.Shared.Auth;
 using SupportPoc.Shared.Contracts;
 using SupportPoc.Shared.Messaging;
+using SupportPoc.Shared.Models;
 using SupportPoc.Shared.Telemetry;
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSupportPocApplicationInsights(builder.Configuration);
@@ -45,6 +47,7 @@ if (entraEnabled)
 var knowledgeClientRegistration = builder.Services.AddHttpClient(KnowledgeSearchClient.HttpClientName);
 if (entraEnabled)
     knowledgeClientRegistration.AddHttpMessageHandler<EntraBearerTokenHandler>();
+builder.Services.AddHttpClient(HttpTicketSnapshotClient.HttpClientName);
 builder.Services.AddSingleton<McpToolGateway>();
 builder.Services.AddSingleton<McpDynamicPluginLoader>();
 builder.Services.AddSingleton<McpToolAccessService>();
@@ -53,17 +56,22 @@ builder.Services.AddSingleton<IKnowledgeSearchClient>(sp => sp.GetRequiredServic
 builder.Services.AddScoped<AiPipelineService>();
 builder.Services.AddScoped<IChatCompletionServiceAccessor>();
 builder.Services.AddScoped<TicketSuggestionService>();
+builder.Services.AddScoped<ITicketSnapshotClient, HttpTicketSnapshotClient>();
 var serviceBus = builder.Configuration.GetSection(ServiceBusOptions.SectionName).Get<ServiceBusOptions>() ?? new ServiceBusOptions();
 builder.Services.Configure<LocalMessagingOptions>(builder.Configuration.GetSection(LocalMessagingOptions.SectionName));
 var localMessaging = builder.Configuration.GetSection(LocalMessagingOptions.SectionName).Get<LocalMessagingOptions>() ?? new LocalMessagingOptions();
-builder.Services.AddHttpClient(HttpConsiderAutoSuggestionGateway.HttpClientName);
-if (localMessaging.HttpBridgeEnabled && !serviceBus.Enabled)
-    builder.Services.AddScoped<IConsiderAutoSuggestionGateway, HttpConsiderAutoSuggestionGateway>();
-else
-    builder.Services.AddScoped<IConsiderAutoSuggestionGateway, MassTransitConsiderAutoSuggestionGateway>();
 builder.Services.AddMassTransit(mt =>
 {
-    mt.AddConsumer<TicketCreatedConsumer, TicketCreatedConsumerDefinition>();
+    mt.AddDelayedMessageScheduler();
+    mt.AddConsumer<GenerateSuggestionRequestedConsumer, GenerateSuggestionRequestedConsumerDefinition>();
+    mt.AddSagaStateMachine<TicketSuggestionStateMachine, TicketSuggestionSaga, TicketSuggestionStateMachineDefinition>()
+        .EntityFrameworkRepository(r =>
+        {
+            r.ConcurrencyMode = ConcurrencyMode.Optimistic;
+            r.AddDbContext<DbContext, OrchestratorDbContext>((provider, cfg) =>
+                cfg.UseSqlite(provider.GetRequiredService<IConfiguration>().GetConnectionString("Orchestrator")
+                    ?? "Data Source=orchestrator.db"));
+        });
     mt.AddEntityFrameworkOutbox<OrchestratorDbContext>(o =>
     {
         o.UseSqlite();
@@ -75,7 +83,8 @@ builder.Services.AddMassTransit(mt =>
         mt.UsingAzureServiceBus((ctx, cfg) =>
         {
             cfg.Host(serviceBus.ConnectionString);
-            EndpointConvention.Map<IConsiderAutoSuggestion>(new Uri("queue:consider-auto-suggestion"));
+            cfg.UseServiceBusMessageScheduler();
+            EndpointConvention.Map<IProposeTicketSuggestion>(new Uri("queue:propose-ticket-suggestion"));
             cfg.ConfigureEndpoints(ctx);
         });
     }
@@ -83,7 +92,8 @@ builder.Services.AddMassTransit(mt =>
     {
         mt.UsingInMemory((ctx, cfg) =>
         {
-            EndpointConvention.Map<IConsiderAutoSuggestion>(new Uri("queue:consider-auto-suggestion"));
+            cfg.UseDelayedMessageScheduler();
+            EndpointConvention.Map<IProposeTicketSuggestion>(new Uri("queue:propose-ticket-suggestion"));
             cfg.ConfigureEndpoints(ctx);
         });
     }
@@ -135,23 +145,37 @@ if (DevBridgeEndpointPolicy.IsEnabled(app.Environment, localMessaging, serviceBu
         return Results.Accepted();
     }).AllowAnonymous();
 }
+static string MapSagaStatusForUi(string? currentState) => currentState switch
+{
+    SagaProcessState.GeneratingSuggestion => AutoSuggestionJobStatus.Running,
+    SagaProcessState.ApplyingSuggestion => AutoSuggestionJobStatus.Produced,
+    SagaProcessState.Reconciling => AutoSuggestionJobStatus.Running,
+    SagaProcessState.Completed => AutoSuggestionJobStatus.Completed,
+    SagaProcessState.Discarded => AutoSuggestionJobStatus.Discarded,
+    SagaProcessState.Failed => AutoSuggestionJobStatus.Failed,
+    _ => AutoSuggestionJobStatus.Running
+};
 app.MapGet("/tickets/{ticketId}/auto-suggestion", async (string ticketId, OrchestratorDbContext db) =>
 {
-    var jobs = await db.AutoSuggestionJobs
-        .Where(j => j.TicketId == ticketId)
+    var sagas = await db.TicketSuggestionSagas
+        .Where(s => s.TicketId == ticketId)
         .ToListAsync();
-    var job = jobs.OrderByDescending(j => j.CreatedAt).FirstOrDefault();
-    if (job is null)
+    var saga = sagas.OrderByDescending(s => s.CreatedAt).FirstOrDefault();
+    if (saga is null)
         return Results.NotFound();
     return Results.Ok(new
     {
-        job.JobId,
-        job.TicketId,
-        job.Status,
-        job.FailureReason,
-        job.DiscardReason,
-        job.CreatedAt,
-        job.UpdatedAt
+        jobId = saga.JobId,
+        saga.TicketId,
+        status = MapSagaStatusForUi(saga.CurrentState),
+        sagaState = saga.CurrentState,
+        saga.CorrelationId,
+        saga.CurrentAttemptId,
+        failureReason = saga.FailureReason,
+        discardReason = saga.DiscardReason,
+        lateMessageAudit = saga.LateMessageAudit,
+        saga.CreatedAt,
+        saga.UpdatedAt
     });
 }).AllowAnonymous();
 app.MapGet("/mcp/tools", async (McpDynamicPluginLoader loader, CancellationToken ct) =>
@@ -171,7 +195,7 @@ app.MapGet("/mcp/allowed-tools", async (McpToolAccessService access, HttpContext
 }).WithEntraPolicy(entraEnabled, PolicyNames.EmployeeOrAbove);
 app.MapGet("/debug/dlq", async (string? queue, IOptions<ServiceBusOptions> sbOpts) =>
 {
-    var queueName = string.IsNullOrWhiteSpace(queue) ? "auto-suggestion-ticket-created" : queue.Trim();
+    var queueName = string.IsNullOrWhiteSpace(queue) ? "generate-suggestion-requested" : queue.Trim();
     var conn = sbOpts.Value.ConnectionString;
     if (string.IsNullOrWhiteSpace(conn))
         return Results.Ok(new { error = "ServiceBus.ConnectionString chua duoc cau hinh.", queue = queueName });
@@ -212,9 +236,9 @@ app.MapGet("/debug/dlq", async (string? queue, IOptions<ServiceBusOptions> sbOpt
         return Results.Ok(new { error = ex.Message, queue = queueName });
     }
 }).AllowAnonymous();
-app.MapGet("/debug/auto-suggestion-jobs", async (string? ticketId, OrchestratorDbContext db) =>
+app.MapGet("/debug/saga-instances", async (string? ticketId, OrchestratorDbContext db) =>
 {
-    var query = db.AutoSuggestionJobs.AsQueryable();
+    var query = db.TicketSuggestionSagas.AsQueryable();
     if (!string.IsNullOrWhiteSpace(ticketId))
         query = query.Where(x => x.TicketId == ticketId);
     var items = (await query.ToListAsync())
@@ -222,11 +246,15 @@ app.MapGet("/debug/auto-suggestion-jobs", async (string? ticketId, OrchestratorD
         .Take(100)
         .Select(x => new
         {
+            x.CorrelationId,
             x.JobId,
             x.TicketId,
-            x.Status,
+            x.CurrentState,
+            x.CurrentAttemptId,
+            x.RetryCount,
             x.FailureReason,
             x.DiscardReason,
+            x.LateMessageAudit,
             x.CreatedAt,
             x.UpdatedAt
         })

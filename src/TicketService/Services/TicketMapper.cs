@@ -20,6 +20,7 @@ internal static class TicketMapper
         RelatedDocuments = JsonSerializer.Deserialize<List<RelatedDocument>>(entity.RelatedDocumentsJson, JsonOptions) ?? [],
         CreatedAt = entity.CreatedAt,
         UpdatedAt = entity.UpdatedAt,
+        Version = entity.Version,
         AutoSuggestionNotifyFailed = autoSuggestionNotifyFailed
     };
 }

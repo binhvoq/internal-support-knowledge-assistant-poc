@@ -12,6 +12,7 @@ public sealed class TicketDto
     public IReadOnlyList<RelatedDocument> RelatedDocuments { get; init; } = [];
     public DateTimeOffset CreatedAt { get; init; }
     public DateTimeOffset UpdatedAt { get; init; }
+    public long Version { get; init; } = 1;
     public bool HasAiSuggestion => !string.IsNullOrWhiteSpace(AiSuggestedAnswer);
 
     /// <summary>Chi POST /tickets: true khi ticket da luu nhung dev bridge notify that bai.</summary>

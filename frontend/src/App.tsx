@@ -9,10 +9,8 @@ import { apiScope } from './auth/msalConfig';
 type View = 'employee' | 'queue' | 'detail' | 'knowledge' | 'chat' | 'auth';
 
 const categories = ['IT', 'HR', 'Finance', 'Other'];
-/** Ticket lifecycle (proposal pipeline — khong con Analyzing cho ticket moi). */
+/** Ticket lifecycle — saga orchestration, khong co Analyzing. */
 const statuses = ['New', 'Suggested', 'Resolved', 'Reopened'];
-/** Chi filter queue — ticket cu co the con Analyzing. */
-const legacyStatuses = ['Analyzing'];
 
 function autoSuggestionStatusText(status: string | null): string {
   switch (status) {
@@ -242,11 +240,6 @@ function QueueView({ onSelect }: { onSelect: (id: string) => void }) {
             <option value="">All</option>
             {statuses.map((s) => (
               <option key={s}>{s}</option>
-            ))}
-            {legacyStatuses.map((s) => (
-              <option key={s} value={s}>
-                {s} (legacy)
-              </option>
             ))}
           </select>
         </div>

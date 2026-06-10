@@ -3,48 +3,42 @@ using Microsoft.EntityFrameworkCore;
 namespace SupportPoc.AiOrchestrator.Data;
 
 /// <summary>
-/// SQLite EnsureCreated khong them/sua bang moi vao DB cu (saga). Tao/sua AutoSuggestionJobs + MassTransit inbox/outbox idempotent.
+/// SQLite EnsureCreated khong them/sua bang moi vao DB cu — tao/sua TicketSuggestionSagas + MassTransit inbox/outbox idempotent.
 /// </summary>
 internal static class OrchestratorDbSchema
 {
     private static readonly string[] MassTransitTables = ["InboxState", "OutboxMessage", "OutboxState"];
 
-    private static readonly (string Name, string SqlType)[] AlterColumns =
-    [
-        ("EmployeeId", "TEXT NOT NULL DEFAULT ''"),
-        ("Question", "TEXT NOT NULL DEFAULT ''"),
-        ("Category", "TEXT NOT NULL DEFAULT 'Other'"),
-        ("Status", "TEXT NOT NULL DEFAULT 'Running'"),
-        ("ProducedCategory", "TEXT NULL"),
-        ("ProducedSuggestion", "TEXT NULL"),
-        ("ProducedRelatedDocumentsJson", "TEXT NOT NULL DEFAULT '[]'"),
-        ("FailureReason", "TEXT NULL"),
-        ("DiscardReason", "TEXT NULL"),
-        ("CreatedAt", "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00+00:00'"),
-        ("UpdatedAt", "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00+00:00'"),
-    ];
-
     public static async Task EnsureSchemaAsync(OrchestratorDbContext db, CancellationToken cancellationToken = default)
     {
         await EnsureMassTransitPersistenceTablesAsync(db, cancellationToken);
 
-        if (!await TableExistsAsync(db, "AutoSuggestionJobs", cancellationToken))
+        if (!await TableExistsAsync(db, "TicketSuggestionSagas", cancellationToken))
         {
 #pragma warning disable EF1003
             await db.Database.ExecuteSqlRawAsync(
                 """
-                CREATE TABLE IF NOT EXISTS AutoSuggestionJobs (
-                    JobId TEXT NOT NULL PRIMARY KEY,
+                CREATE TABLE IF NOT EXISTS TicketSuggestionSagas (
+                    CorrelationId TEXT NOT NULL PRIMARY KEY,
+                    CurrentState TEXT NOT NULL,
+                    RowVersion BLOB NULL,
                     TicketId TEXT NOT NULL,
                     EmployeeId TEXT NOT NULL,
                     Question TEXT NOT NULL,
-                    Category TEXT NOT NULL,
-                    Status TEXT NOT NULL,
-                    ProducedCategory TEXT NULL,
-                    ProducedSuggestion TEXT NULL,
-                    ProducedRelatedDocumentsJson TEXT NOT NULL DEFAULT '[]',
+                    OriginalCategory TEXT NOT NULL,
+                    JobId TEXT NOT NULL,
+                    CurrentAttemptId TEXT NOT NULL,
+                    RetryCount INTEGER NOT NULL DEFAULT 0,
+                    TicketVersionAtStart INTEGER NULL,
+                    StepTimeoutTokenId TEXT NULL,
+                    LastProposeCommandId TEXT NULL,
+                    GeneratedCategory TEXT NULL,
+                    GeneratedSuggestion TEXT NULL,
+                    GeneratedRelatedDocumentsJson TEXT NOT NULL DEFAULT '[]',
                     FailureReason TEXT NULL,
                     DiscardReason TEXT NULL,
+                    LateMessageAudit TEXT NULL,
+                    PendingReconcileAction TEXT NULL,
                     CreatedAt TEXT NOT NULL,
                     UpdatedAt TEXT NOT NULL
                 );
@@ -52,35 +46,18 @@ internal static class OrchestratorDbSchema
                 cancellationToken);
 #pragma warning restore EF1003
         }
-        else
-        {
-            var columns = await GetColumnsAsync(db, "AutoSuggestionJobs", cancellationToken);
-            foreach (var (name, sqlType) in AlterColumns)
-            {
-                if (columns.Contains(name))
-                    continue;
-
-#pragma warning disable EF1003
-                await db.Database.ExecuteSqlRawAsync(
-                    "ALTER TABLE AutoSuggestionJobs ADD COLUMN " + name + " " + sqlType,
-                    cancellationToken);
-#pragma warning restore EF1003
-            }
-        }
 
 #pragma warning disable EF1003
         await db.Database.ExecuteSqlRawAsync(
-            "CREATE INDEX IF NOT EXISTS IX_AutoSuggestionJobs_TicketId ON AutoSuggestionJobs (TicketId);",
+            "CREATE INDEX IF NOT EXISTS IX_TicketSuggestionSagas_TicketId ON TicketSuggestionSagas (TicketId);",
             cancellationToken);
 #pragma warning restore EF1003
     }
 
-    /// <summary>DB saga cu co bang khac nhung thieu InboxState/Outbox* — EnsureCreated khong bo sung.</summary>
     private static async Task EnsureMassTransitPersistenceTablesAsync(
         OrchestratorDbContext db,
         CancellationToken cancellationToken)
     {
-        // Khong return som khi chi co InboxState — legacy co the thieu OutboxMessage/OutboxState.
         var options = new DbContextOptionsBuilder<OrchestratorDbContext>()
             .UseSqlite("Data Source=:memory:")
             .Options;
@@ -128,7 +105,7 @@ internal static class OrchestratorDbSchema
 
     private static bool RelatesToOrchestratorPersistence(string statement)
     {
-        if (statement.Contains("AutoSuggestionJobs", StringComparison.OrdinalIgnoreCase))
+        if (statement.Contains("TicketSuggestionSagas", StringComparison.OrdinalIgnoreCase))
             return true;
         return MassTransitTables.Any(t => statement.Contains(t, StringComparison.OrdinalIgnoreCase));
     }
@@ -149,30 +126,6 @@ internal static class OrchestratorDbSchema
         }
 
         return null;
-    }
-
-    private static async Task<HashSet<string>> GetColumnsAsync(
-        OrchestratorDbContext db,
-        string tableName,
-        CancellationToken cancellationToken)
-    {
-        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var connection = db.Database.GetDbConnection();
-        await connection.OpenAsync(cancellationToken);
-        try
-        {
-            await using var cmd = connection.CreateCommand();
-            cmd.CommandText = "PRAGMA table_info(" + tableName + ")";
-            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-            while (await reader.ReadAsync(cancellationToken))
-                columns.Add(reader.GetString(1));
-        }
-        finally
-        {
-            await connection.CloseAsync();
-        }
-
-        return columns;
     }
 
     private static async Task<bool> TableExistsAsync(

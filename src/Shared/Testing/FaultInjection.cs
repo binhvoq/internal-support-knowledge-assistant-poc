@@ -8,7 +8,10 @@ public static class FaultInjection
     /// <summary>Throw uncaught trong AI step → MassTransit retry → DLQ.</summary>
     public const string ForcePoisonAi = "__POISON_AI__";
 
-    /// <summary>AI xong nhung khong gui Consider (test job stuck Produced).</summary>
+    /// <summary>AI worker khong publish result (test timeout/reconcile).</summary>
+    public const string ForceSkipGenerate = "__SKIP_GENERATE__";
+
+    /// <summary>Legacy alias — tuong duong ForceSkipGenerate.</summary>
     public const string ForceSkipConsider = "__SKIP_CONSIDER__";
 
     public static bool Has(this string? text, string marker)

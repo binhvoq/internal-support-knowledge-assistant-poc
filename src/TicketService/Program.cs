@@ -22,7 +22,7 @@ builder.Services.Configure<LocalMessagingOptions>(builder.Configuration.GetSecti
 builder.Services.AddDbContext<TicketDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("Tickets") ?? "Data Source=tickets.db"));
 builder.Services.AddHttpClient(OrchestratorDevBridge.HttpClientName);
-builder.Services.AddScoped<ConsiderAutoSuggestionApplier>();
+builder.Services.AddScoped<ProposeTicketSuggestionApplier>();
 builder.Services.AddScoped<OrchestratorDevBridge>();
 builder.Services.AddCors(options =>
     options.AddDefaultPolicy(p => p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
@@ -33,7 +33,7 @@ var localMessaging = builder.Configuration.GetSection(LocalMessagingOptions.Sect
 
 builder.Services.AddMassTransit(mt =>
 {
-    mt.AddConsumer<ConsiderAutoSuggestionConsumer, ConsiderAutoSuggestionConsumerDefinition>();
+    mt.AddConsumer<ProposeTicketSuggestionConsumer, ProposeTicketSuggestionConsumerDefinition>();
 
     // Transactional Outbox: HTTP POST /tickets se Publish ITicketCreated qua outbox
     // -> ghi cung transaction voi TicketEntity -> khong con dual-write.
@@ -105,22 +105,15 @@ app.MapGet("/ready", async (
 
 if (DevBridgeEndpointPolicy.IsEnabled(app.Environment, localMessaging, serviceBus))
 {
-    app.MapPost("/internal/dev/consider-auto-suggestion", async (
+    app.MapPost("/internal/dev/propose-ticket-suggestion", async (
         HttpContext httpContext,
-        ConsiderAutoSuggestion request,
-        ConsiderAutoSuggestionApplier applier,
-        IPublishEndpoint publish) =>
+        ProposeTicketSuggestion request,
+        ProposeTicketSuggestionApplier applier) =>
     {
         if (!DevBridgeEndpointPolicy.IsLocalCaller(httpContext))
             return DevBridgeEndpointPolicy.RejectDisabled();
 
         var outcome = await applier.ApplyAsync(request);
-        if (!outcome.Accepted)
-        {
-            await publish.Publish<IAutoSuggestionDiscarded>(
-                new AutoSuggestionDiscarded(request.JobId, request.TicketId, outcome.RejectReason ?? "Rejected"));
-        }
-
         return Results.Ok(new { accepted = outcome.Accepted, rejectReason = outcome.RejectReason });
     }).AllowAnonymous();
 }
@@ -210,6 +203,7 @@ app.MapPost("/tickets", async (
         Category = category,
         Question = request.Question.Trim(),
         Status = TicketStatus.New,
+        Version = 1,
         CreatedAt = now,
         UpdatedAt = now
     };
@@ -225,7 +219,8 @@ app.MapPost("/tickets", async (
         entity.Id,
         entity.EmployeeId,
         entity.Question,
-        entity.Category);
+        entity.Category,
+        entity.Version);
 
     var useHttpBridge = localOpts.Value.HttpBridgeEnabled && !sbOpts.Value.Enabled;
     if (!useHttpBridge)

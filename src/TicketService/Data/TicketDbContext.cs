@@ -7,6 +7,7 @@ public sealed class TicketDbContext(DbContextOptions<TicketDbContext> options) :
 {
     public DbSet<TicketEntity> Tickets => Set<TicketEntity>();
     public DbSet<IdempotencyRecordEntity> IdempotencyRecords => Set<IdempotencyRecordEntity>();
+    public DbSet<ProcessedCommandEntity> ProcessedCommands => Set<ProcessedCommandEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -30,6 +31,13 @@ public sealed class TicketDbContext(DbContextOptions<TicketDbContext> options) :
             entity.Property(x => x.Scope).HasMaxLength(128);
             entity.Property(x => x.Key).HasMaxLength(128);
             entity.Property(x => x.RequestHash).HasMaxLength(128);
+        });
+
+        modelBuilder.Entity<ProcessedCommandEntity>(entity =>
+        {
+            entity.HasKey(x => x.CommandId);
+            entity.Property(x => x.TicketId).HasMaxLength(32);
+            entity.HasIndex(x => x.TicketId);
         });
     }
 }

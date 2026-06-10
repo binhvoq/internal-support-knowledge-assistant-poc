@@ -7,7 +7,7 @@ namespace SupportPoc.AiOrchestrator.Tests;
 public sealed class OrchestratorDbSchemaTests
 {
     [Fact]
-    public async Task EnsureSchema_creates_AutoSuggestionJobs_on_legacy_db_without_table()
+    public async Task EnsureSchema_creates_TicketSuggestionSagas_on_legacy_db_without_table()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"orch-legacy-{Guid.NewGuid():N}.db");
         await using var connection = new SqliteConnection($"Data Source={dbPath}");
@@ -33,19 +33,19 @@ public sealed class OrchestratorDbSchemaTests
         }
 
         await using var check = connection.CreateCommand();
-        check.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND name='AutoSuggestionJobs'";
+        check.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND name='TicketSuggestionSagas'";
         var name = await check.ExecuteScalarAsync();
-        Assert.Equal("AutoSuggestionJobs", name);
+        Assert.Equal("TicketSuggestionSagas", name);
 
         await using var info = connection.CreateCommand();
-        info.CommandText = "PRAGMA table_info(AutoSuggestionJobs)";
+        info.CommandText = "PRAGMA table_info(TicketSuggestionSagas)";
         var columns = new List<string>();
         await using var reader = await info.ExecuteReaderAsync();
         while (await reader.ReadAsync())
             columns.Add(reader.GetString(1));
-        Assert.Contains("JobId", columns);
+        Assert.Contains("CorrelationId", columns);
         Assert.Contains("TicketId", columns);
-        Assert.Contains("Status", columns);
+        Assert.Contains("CurrentState", columns);
     }
 
     [Fact]
@@ -74,7 +74,7 @@ public sealed class OrchestratorDbSchemaTests
             await OrchestratorDbSchema.EnsureSchemaAsync(db);
         }
 
-        foreach (var table in new[] { "InboxState", "OutboxMessage", "OutboxState", "AutoSuggestionJobs" })
+        foreach (var table in new[] { "InboxState", "OutboxMessage", "OutboxState", "TicketSuggestionSagas" })
         {
             await using var check = connection.CreateCommand();
             check.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name=$name";
