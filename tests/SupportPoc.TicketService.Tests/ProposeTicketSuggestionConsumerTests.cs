@@ -195,6 +195,45 @@ public sealed class ProposeTicketSuggestionConsumerTests
     }
 
     [Fact]
+    public async Task Concurrent_proposals_only_one_accepted()
+    {
+        await using var provider = BuildProvider();
+        await SeedTicketAsync(provider, "TCK-RACE", TicketStatus.New, version: 1);
+
+        var jobA = Guid.NewGuid();
+        var jobB = Guid.NewGuid();
+        var msgA = new ProposeTicketSuggestion(
+            Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), jobA,
+            "TCK-RACE", SupportCategory.IT, "winner", [], 1);
+        var msgB = new ProposeTicketSuggestion(
+            Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), jobB,
+            "TCK-RACE", SupportCategory.IT, "loser", [], 1);
+
+        async Task<ProposeTicketSuggestionApplier.Outcome> ApplyInScope(IProposeTicketSuggestion msg)
+        {
+            await using var scope = provider.CreateAsyncScope();
+            var applier = scope.ServiceProvider.GetRequiredService<ProposeTicketSuggestionApplier>();
+            return await applier.ApplyAsync(msg);
+        }
+
+        var results = await Task.WhenAll(ApplyInScope(msgA), ApplyInScope(msgB));
+
+        Assert.Equal(1, results.Count(r => r.Accepted));
+        Assert.Equal(1, results.Count(r => !r.Accepted));
+
+        await using var verifyScope = provider.CreateAsyncScope();
+        var db = verifyScope.ServiceProvider.GetRequiredService<TicketDbContext>();
+        var ticket = await db.Tickets.FindAsync("TCK-RACE");
+        Assert.Equal(TicketStatus.Suggested, ticket!.Status);
+        Assert.Equal(2, ticket.Version);
+        Assert.True(ticket.AiSuggestedAnswer is "winner" or "loser");
+
+        var commands = await db.ProcessedCommands.Where(c => c.TicketId == "TCK-RACE").ToListAsync();
+        Assert.Equal(2, commands.Count);
+        Assert.Equal(1, commands.Count(c => c.Accepted));
+    }
+
+    [Fact]
     public async Task Duplicate_command_id_returns_same_response()
     {
         var commandId = Guid.NewGuid();
