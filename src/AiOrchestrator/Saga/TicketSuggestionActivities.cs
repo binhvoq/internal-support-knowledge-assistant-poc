@@ -33,6 +33,7 @@ internal static class TicketSuggestionActivities
         context.Saga.TicketVersionAtStart = msg.TicketVersion;
         context.Saga.CreatedAt = now;
         context.Saga.UpdatedAt = now;
+        context.Saga.RowVersion = [0, 0, 0, 0, 0, 0, 0, 1];
     }
 
     internal static void StartNewAttempt(BehaviorContext<TicketSuggestionSaga> context)

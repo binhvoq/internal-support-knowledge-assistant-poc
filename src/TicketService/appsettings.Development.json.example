@@ -6,11 +6,11 @@
     }
   },
   "ServiceBus": {
-    "ConnectionString": "",
+    "ConnectionString": "Endpoint=sb://localhost;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;",
     "TopicName": "support-events"
   },
   "LocalMessaging": {
-    "HttpBridgeEnabled": true,
+    "HttpBridgeEnabled": false,
     "TicketServiceBaseUrl": "http://localhost:5001",
     "AiOrchestratorBaseUrl": "http://localhost:5003"
   },

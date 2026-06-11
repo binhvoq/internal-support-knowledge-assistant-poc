@@ -6,7 +6,7 @@ public sealed class TicketSuggestionSaga : SagaStateMachineInstance
 {
     public Guid CorrelationId { get; set; }
     public string CurrentState { get; set; } = string.Empty;
-    public byte[] RowVersion { get; set; } = [];
+    public byte[] RowVersion { get; set; } = [0, 0, 0, 0, 0, 0, 0, 1];
 
     public string TicketId { get; set; } = string.Empty;
     public string EmployeeId { get; set; } = string.Empty;

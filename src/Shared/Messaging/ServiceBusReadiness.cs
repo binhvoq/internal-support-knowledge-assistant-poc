@@ -10,69 +10,121 @@ public static class ServiceBusReadiness
     public static Result Check(ServiceBusOptions options)
     {
         if (!options.Enabled)
-            return new Result(true, "inmemory", "ServiceBus.ConnectionString empty — MassTransit in-memory (single process only).");
+            return new Result(
+                false,
+                "none",
+                "ServiceBus.ConnectionString empty — reliable cross-service messaging requires Azure Service Bus or the local emulator.");
 
-        if (!TryGetHost(options.ConnectionString, out var host))
-            return new Result(false, "servicebus", "ConnectionString khong parse duoc host.");
+        if (!options.TryGetEndpoint(out var endpoint))
+            return new Result(false, "servicebus", "ConnectionString khong parse duoc Endpoint (sb://host[:port]).");
+
+        if (options.IsDevelopmentEmulator && IsLocalEmulatorHost(endpoint.Host))
+            return new Result(true, "servicebus-emulator", $"Emulator endpoint {endpoint.Host}:{endpoint.Port?.ToString() ?? "default"}.");
 
         try
         {
-            var addresses = Dns.GetHostAddresses(host);
+            var addresses = Dns.GetHostAddresses(endpoint.Host);
             if (addresses.Length == 0)
-                return new Result(false, "servicebus", $"DNS khong tra ve dia chi cho {host}.");
+                return new Result(false, "servicebus", $"DNS khong tra ve dia chi cho {endpoint.Host}.");
 
-            return new Result(true, "servicebus", $"Host {host} resolvable.");
+            return new Result(true, "servicebus", $"Host {endpoint.Host} resolvable.");
         }
         catch (Exception ex)
         {
-            return new Result(false, "servicebus", $"Khong resolve duoc {host}: {ex.Message}");
+            return new Result(false, "servicebus", $"Khong resolve duoc {endpoint.Host}: {ex.Message}");
         }
     }
 
     public static async Task<Result> CheckTcpAsync(ServiceBusOptions options, CancellationToken cancellationToken = default)
     {
+        if (!options.Enabled)
+            return Check(options);
+
+        if (!options.TryGetEndpoint(out var endpoint))
+            return new Result(false, "servicebus", "ConnectionString khong parse duoc Endpoint (sb://host[:port]).");
+
+        if (options.IsDevelopmentEmulator && IsLocalEmulatorHost(endpoint.Host))
+            return await CheckEmulatorAsync(endpoint, cancellationToken);
+
         var dns = Check(options);
-        if (!dns.Ready || !options.Enabled)
+        if (!dns.Ready)
             return dns;
 
-        if (!TryGetHost(options.ConnectionString, out var host))
-            return new Result(false, "servicebus", "ConnectionString khong parse duoc host.");
+        return await ProbeTcpAsync(endpoint.Host, [443], "servicebus", cancellationToken);
+    }
+
+    private static async Task<Result> CheckEmulatorAsync(
+        ServiceBusOptions.EndpointInfo endpoint,
+        CancellationToken cancellationToken)
+    {
+        var healthPort = ServiceBusOptions.ResolveEmulatorHealthPort(endpoint);
+        var healthUrl = $"http://{endpoint.Host}:{healthPort}/health";
 
         try
         {
-            using var client = new TcpClient();
-            var connectTask = client.ConnectAsync(host, 443, cancellationToken).AsTask();
-            if (await Task.WhenAny(connectTask, Task.Delay(TimeSpan.FromSeconds(3), cancellationToken)) != connectTask)
-                return new Result(false, "servicebus", $"Timeout ket noi TCP 443 toi {host}.");
-
-            await connectTask;
-            return new Result(true, "servicebus", $"TCP 443 toi {host} OK.");
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            using var response = await http.GetAsync(healthUrl, cancellationToken);
+            if (response.IsSuccessStatusCode)
+            {
+                return new Result(
+                    true,
+                    "servicebus-emulator",
+                    $"Emulator health OK ({healthUrl}).");
+            }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return new Result(false, "servicebus", $"Khong ket noi duoc {host}:443 — {ex.Message}");
+            // Fall through to TCP probes.
         }
+
+        var ports = new List<int> { ServiceBusOptions.EmulatorManagementPort, 5672, 5673 };
+        if (endpoint.Port is > 0 && !ports.Contains(endpoint.Port.Value))
+            ports.Insert(0, endpoint.Port.Value);
+
+        var tcp = await ProbeTcpAsync(endpoint.Host, ports, "servicebus-emulator", cancellationToken);
+        if (tcp.Ready)
+            return tcp;
+
+        return new Result(
+            false,
+            "servicebus-emulator",
+            $"{tcp.Detail} Khoi dong Azure Service Bus Emulator (Docker) — health: {healthUrl}.");
     }
 
-    private static bool TryGetHost(string? connectionString, out string host)
+    private static async Task<Result> ProbeTcpAsync(
+        string host,
+        IEnumerable<int> ports,
+        string transport,
+        CancellationToken cancellationToken)
     {
-        host = string.Empty;
-        if (string.IsNullOrWhiteSpace(connectionString))
-            return false;
+        Exception? lastError = null;
+        foreach (var port in ports.Distinct())
+        {
+            try
+            {
+                using var client = new TcpClient();
+                var connectTask = client.ConnectAsync(host, port, cancellationToken).AsTask();
+                if (await Task.WhenAny(connectTask, Task.Delay(TimeSpan.FromSeconds(3), cancellationToken)) != connectTask)
+                {
+                    lastError = new TimeoutException($"Timeout ket noi TCP {port} toi {host}.");
+                    continue;
+                }
 
-        const string marker = "sb://";
-        var start = connectionString.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-        if (start < 0)
-            return false;
+                await connectTask;
+                return new Result(true, transport, $"TCP {host}:{port} OK.");
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                lastError = ex;
+            }
+        }
 
-        start += marker.Length;
-        var end = connectionString.IndexOf('/', start);
-        if (end < 0)
-            end = connectionString.IndexOf(';', start);
-        if (end < 0)
-            end = connectionString.Length;
-
-        host = connectionString[start..end].Trim();
-        return !string.IsNullOrWhiteSpace(host);
+        return new Result(
+            false,
+            transport,
+            $"Khong ket noi duoc {host} tren port [{string.Join(", ", ports)}] — {lastError?.Message}.");
     }
+
+    private static bool IsLocalEmulatorHost(string host) =>
+        ServiceBusOptions.IsLocalEmulatorHost(host);
 }

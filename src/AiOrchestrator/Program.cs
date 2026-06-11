@@ -25,7 +25,7 @@ if (entraEnabled)
 }
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<IFunctionInvocationFilter, McpRoleInvocationFilter>();
-builder.Services.Configure<ServiceBusOptions>(builder.Configuration.GetSection(ServiceBusOptions.SectionName));
+builder.Services.AddSupportPocMessagingOptions(builder.Configuration);
 builder.Services.Configure<AzureOpenAIOptions>(builder.Configuration.GetSection(AzureOpenAIOptions.SectionName));
 builder.Services.Configure<ServiceEndpointsOptions>(builder.Configuration.GetSection(ServiceEndpointsOptions.SectionName));
 builder.Services.Configure<AutoSuggestionOptions>(builder.Configuration.GetSection(AutoSuggestionOptions.SectionName));
@@ -58,8 +58,7 @@ builder.Services.AddScoped<IChatCompletionServiceAccessor>();
 builder.Services.AddScoped<TicketSuggestionService>();
 builder.Services.AddScoped<ITicketSnapshotClient, HttpTicketSnapshotClient>();
 var serviceBus = builder.Configuration.GetSection(ServiceBusOptions.SectionName).Get<ServiceBusOptions>() ?? new ServiceBusOptions();
-builder.Services.Configure<LocalMessagingOptions>(builder.Configuration.GetSection(LocalMessagingOptions.SectionName));
-var localMessaging = builder.Configuration.GetSection(LocalMessagingOptions.SectionName).Get<LocalMessagingOptions>() ?? new LocalMessagingOptions();
+var localMessaging = MessagingOptionsExtensions.ResolveLocalMessaging(builder.Configuration);
 builder.Services.AddMassTransit(mt =>
 {
     mt.AddDelayedMessageScheduler();
@@ -80,9 +79,8 @@ builder.Services.AddMassTransit(mt =>
     });
     if (serviceBus.Enabled)
     {
-        mt.UsingAzureServiceBus((ctx, cfg) =>
+        mt.AddSupportPocAzureServiceBusHost(serviceBus, (ctx, cfg) =>
         {
-            cfg.Host(serviceBus.ConnectionString);
             cfg.UseServiceBusMessageScheduler();
             EndpointConvention.Map<IProposeTicketSuggestion>(new Uri("queue:propose-ticket-suggestion"));
             cfg.ConfigureEndpoints(ctx);
@@ -196,7 +194,7 @@ app.MapGet("/mcp/allowed-tools", async (McpToolAccessService access, HttpContext
 app.MapGet("/debug/dlq", async (string? queue, IOptions<ServiceBusOptions> sbOpts) =>
 {
     var queueName = string.IsNullOrWhiteSpace(queue) ? "generate-suggestion-requested" : queue.Trim();
-    var conn = sbOpts.Value.ConnectionString;
+    var conn = sbOpts.Value.GetAdministrationConnectionString();
     if (string.IsNullOrWhiteSpace(conn))
         return Results.Ok(new { error = "ServiceBus.ConnectionString chua duoc cau hinh.", queue = queueName });
     try

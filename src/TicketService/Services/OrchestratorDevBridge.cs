@@ -13,7 +13,7 @@ public sealed class OrchestratorDevBridge(
     public const string HttpClientName = "ai-orchestrator-bridge";
     private static readonly TimeSpan[] RetryDelays = [TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(500), TimeSpan.FromSeconds(1)];
 
-    /// <summary>Retry ngan; tra ve false neu van fail (ticket da commit — caller quyet dinh response).</summary>
+    /// <summary>Best-effort debug shortcut — khong co Outbox. Retry ngan; false neu van fail sau khi ticket da commit.</summary>
     public async Task<bool> TryNotifyTicketCreatedAsync(ITicketCreated message, CancellationToken cancellationToken = default)
     {
         var baseUrl = options.Value.AiOrchestratorBaseUrl.TrimEnd('/');

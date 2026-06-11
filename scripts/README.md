@@ -37,9 +37,9 @@ PoC nay la **Internal Support Knowledge Assistant**: employee tao support ticket
 | [`sync-config.sh`](sync-config.sh) | Dong bo `config/azure.local.json` sang `src/*/appsettings.Development.json` **va dotnet user-secrets** (tranh stale override). | Da co config local va chi can apply vao services. |
 | [`azure-resources-stop.sh`](azure-resources-stop.sh) | Luu state resource roi xoa RG de giam chi phi. | Khi dung PoC xong va muon tat Azure resources ton phi. |
 | [`azure-resources-start.sh`](azure-resources-start.sh) | Bat lai resources: refresh neu RG con ton tai, provision neu RG da bi xoa. | Khi muon chay lai PoC sau khi stop. |
-| [`restart-services.sh`](restart-services.sh) | Build va restart 4 backend local tren ports 5001-5004. | Sau khi sync config hoac sua backend. |
+| [`restart-services.sh`](restart-services.sh) | Build va restart 4 backend local tren ports 5001-5004. **Can Azure Service Bus Emulator hoac Service Bus that** — khong tu bat HTTP bridge. | Sau khi sync config, emulator dang chay, hoac sua backend. |
 | [`smoke-test.sh`](smoke-test.sh) | Chay flow dev end-to-end: health, MCP tools, re-index, tao ticket, AI suggestion, chat, resolve. Khi `AzureAd:Enabled=true`: tu dong dung client credentials; re-index can `SMOKE_BEARER_TOKEN` (user JWT). | De xac nhan PoC dang work. |
-| [`integration-e2e.sh`](integration-e2e.sh) | Real integration smoke: `/ready` matrix (SB/bridge/Production), happy path bridge + Service Bus, BC-03/BC-06, AI fail, bridge notify. Dung `--no-launch-profile` de `ASPNETCORE_ENVIRONMENT` khong bi `launchSettings.json` ghi de. | Sau thay doi messaging/auth; bat bug runtime khong unit test. |
+| [`integration-e2e.sh`](integration-e2e.sh) | Real integration smoke: Outbox path qua Service Bus/emulator; test HTTP bridge chi khi bat `USE_HTTP_BRIDGE=true` (debug). Dung `--no-launch-profile` de `ASPNETCORE_ENVIRONMENT` khong bi `launchSettings.json` ghi de. | Sau thay doi messaging/auth; bat bug runtime khong unit test. |
 | [`integration-e2e-legacy-poison.sh`](integration-e2e-legacy-poison.sh) | DB legacy (`TicketSuggestionStates` only) + `__POISON_AI__` / DLQ. | Truoc commit khi sua orchestrator schema hoac MassTransit retry. |
 
 **Entra login + E2E:** Doc day du [`../docs/zero-trust-identity.md`](../docs/zero-trust-identity.md) §5, §10, §11.
@@ -71,12 +71,23 @@ smoke-test.sh
   -> can 4 backend dang chay
 ```
 
+## Azure Service Bus Emulator (local Outbox path)
+
+Reliable messaging local can emulator hoac Service Bus that — xem [`../docs/mini_business_poc.md`](../docs/mini_business_poc.md) §17.
+
+1. Cai Docker, clone [azure-service-bus-emulator-installer](https://github.com/Azure/azure-service-bus-emulator-installer), `docker compose up`.
+2. Copy `appsettings.Development.json.example` → `appsettings.Development.json` (TicketService + AiOrchestrator) — connection string mac dinh da co `UseDevelopmentEmulator=true`.
+3. Chi dung `USE_HTTP_BRIDGE=true` khi co y debug shortcut (khong Outbox).
+
 ## Flow chay nhanh
 
 Chay tu root repo `D:\ProjectThem5`:
 
 ```bash
-# Tao hoac bat lai Azure resources
+# Emulator local HOAC Azure Service Bus that
+# docker compose up   # trong thu muc emulator installer
+
+# Tao hoac bat lai Azure resources (neu dung cloud thay vi emulator)
 bash scripts/azure-resources-start.sh
 
 # Restart 4 backend local

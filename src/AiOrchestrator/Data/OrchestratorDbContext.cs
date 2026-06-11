@@ -21,7 +21,7 @@ public sealed class OrchestratorDbContext(DbContextOptions<OrchestratorDbContext
             entity.Property(x => x.TicketId).HasMaxLength(32);
             entity.Property(x => x.EmployeeId).HasMaxLength(64);
             entity.Property(x => x.OriginalCategory).HasMaxLength(32);
-            entity.Property(x => x.RowVersion).IsRowVersion();
+            entity.Property(x => x.RowVersion).IsRowVersion().HasDefaultValue(new byte[] { 0, 0, 0, 0, 0, 0, 0, 1 });
             entity.HasIndex(x => x.TicketId);
         });
     }

@@ -17,8 +17,7 @@ var entraEnabled = builder.Configuration.IsEntraEnabled();
 if (entraEnabled)
     builder.Services.AddSupportPocEntraAuth(builder.Configuration);
 
-builder.Services.Configure<ServiceBusOptions>(builder.Configuration.GetSection(ServiceBusOptions.SectionName));
-builder.Services.Configure<LocalMessagingOptions>(builder.Configuration.GetSection(LocalMessagingOptions.SectionName));
+builder.Services.AddSupportPocMessagingOptions(builder.Configuration);
 builder.Services.AddDbContext<TicketDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("Tickets") ?? "Data Source=tickets.db"));
 builder.Services.AddHttpClient(OrchestratorDevBridge.HttpClientName);
@@ -29,7 +28,7 @@ builder.Services.AddCors(options =>
 
 // ---------- MassTransit ----------
 var serviceBus = builder.Configuration.GetSection(ServiceBusOptions.SectionName).Get<ServiceBusOptions>() ?? new ServiceBusOptions();
-var localMessaging = builder.Configuration.GetSection(LocalMessagingOptions.SectionName).Get<LocalMessagingOptions>() ?? new LocalMessagingOptions();
+var localMessaging = MessagingOptionsExtensions.ResolveLocalMessaging(builder.Configuration);
 
 builder.Services.AddMassTransit(mt =>
 {
@@ -46,9 +45,8 @@ builder.Services.AddMassTransit(mt =>
 
     if (serviceBus.Enabled)
     {
-        mt.UsingAzureServiceBus((ctx, cfg) =>
+        mt.AddSupportPocAzureServiceBusHost(serviceBus, (ctx, cfg) =>
         {
-            cfg.Host(serviceBus.ConnectionString);
             cfg.UseServiceBusMessageScheduler();
             cfg.ConfigureEndpoints(ctx);
         });
@@ -222,9 +220,19 @@ app.MapPost("/tickets", async (
         entity.Category,
         entity.Version);
 
-    var useHttpBridge = localOpts.Value.HttpBridgeEnabled && !sbOpts.Value.Enabled;
-    if (!useHttpBridge)
+    var useHttpBridge = DevBridgeEndpointPolicy.ShouldUseHttpBridge(
+        httpContext.RequestServices.GetRequiredService<IHostEnvironment>(),
+        localOpts.Value,
+        sbOpts.Value);
+    if (useHttpBridge)
+    {
+        logger.LogWarning(
+            "POST /tickets dang dung HTTP dev bridge (best-effort) — khong ghi TicketCreated vao Outbox. Dat ServiceBus emulator connection string cho reliable path.");
+    }
+    else
+    {
         await publish.Publish<ITicketCreated>(created);
+    }
 
     var dto = TicketMapper.ToDto(entity);
     if (!string.IsNullOrWhiteSpace(idempotencyKey))

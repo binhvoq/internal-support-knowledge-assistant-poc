@@ -4,11 +4,19 @@ using System.Net;
 
 namespace SupportPoc.Shared.Messaging;
 
-/// <summary>Chinh sach endpoint HTTP dev bridge — chi Development + bridge bat + khong dung Service Bus.</summary>
+/// <summary>
+/// HTTP dev bridge — Development only, best-effort debug shortcut. Not the Outbox/reliable path.
+/// </summary>
 public static class DevBridgeEndpointPolicy
 {
-    public static bool IsEnabled(IHostEnvironment env, LocalMessagingOptions local, ServiceBusOptions bus) =>
+    public static bool ShouldUseHttpBridge(
+        IHostEnvironment env,
+        LocalMessagingOptions local,
+        ServiceBusOptions bus) =>
         env.IsDevelopment() && local.HttpBridgeEnabled && !bus.Enabled;
+
+    public static bool IsEnabled(IHostEnvironment env, LocalMessagingOptions local, ServiceBusOptions bus) =>
+        ShouldUseHttpBridge(env, local, bus);
 
     public static bool IsLocalCaller(HttpContext httpContext)
     {
@@ -28,7 +36,7 @@ public static class DevBridgeEndpointPolicy
     public sealed record PipelineReadinessResult(bool Ready, string Transport, string? Detail, bool HttpBridge);
 
     /// <summary>
-    /// Cung dieu kien map endpoint dev bridge. In-memory (ServiceBus off, bridge off) = not ready cho cross-service.
+    /// Reliable path: Service Bus (cloud or emulator). HTTP bridge is optional debug only.
     /// </summary>
     public static async Task<PipelineReadinessResult> EvaluatePipelineAsync(
         IHostEnvironment env,
@@ -39,7 +47,8 @@ public static class DevBridgeEndpointPolicy
         if (bus.Enabled)
         {
             var sb = await ServiceBusReadiness.CheckTcpAsync(bus, cancellationToken);
-            return new PipelineReadinessResult(sb.Ready, sb.Transport, sb.Detail, false);
+            var transport = bus.IsDevelopmentEmulator ? "servicebus-emulator" : sb.Transport;
+            return new PipelineReadinessResult(sb.Ready, transport, sb.Detail, false);
         }
 
         if (IsEnabled(env, local, bus))
@@ -47,13 +56,13 @@ public static class DevBridgeEndpointPolicy
             return new PipelineReadinessResult(
                 true,
                 "http-bridge",
-                "Development + HttpBridgeEnabled + ServiceBus off — dev bridge endpoints available.",
+                "DEBUG ONLY: Development + USE_HTTP_BRIDGE/HttpBridgeEnabled + ServiceBus off — best-effort HTTP bridge, khong co Outbox guarantee.",
                 true);
         }
 
         var detail = local.HttpBridgeEnabled && !env.IsDevelopment()
-            ? "HttpBridgeEnabled=true nhung khong phai Development — endpoint bridge khong duoc map."
-            : "ServiceBus off va HTTP bridge khong bat — in-memory chi single-process, pipeline cross-service khong chay.";
+            ? "HttpBridgeEnabled/USE_HTTP_BRIDGE bat nhung khong phai Development — endpoint bridge khong duoc map."
+            : "ServiceBus.ConnectionString trong — cau hinh Azure Service Bus hoac Emulator (UseDevelopmentEmulator=true). HTTP bridge chi dung khi co y bat USE_HTTP_BRIDGE=true.";
 
         return new PipelineReadinessResult(false, "none", detail, local.HttpBridgeEnabled);
     }
