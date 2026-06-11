@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Azure.Messaging.ServiceBus.Administration;
 using MassTransit;
+using MassTransit.EntityFrameworkCoreIntegration;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.SemanticKernel;
@@ -12,6 +13,7 @@ using SupportPoc.AiOrchestrator.Saga;
 using SupportPoc.AiOrchestrator.Services;
 using SupportPoc.Shared.Auth;
 using SupportPoc.Shared.Contracts;
+using SupportPoc.Shared.Data;
 using SupportPoc.Shared.Messaging;
 using SupportPoc.Shared.Models;
 using SupportPoc.Shared.Telemetry;
@@ -29,8 +31,11 @@ builder.Services.AddSupportPocMessagingOptions(builder.Configuration);
 builder.Services.Configure<AzureOpenAIOptions>(builder.Configuration.GetSection(AzureOpenAIOptions.SectionName));
 builder.Services.Configure<ServiceEndpointsOptions>(builder.Configuration.GetSection(ServiceEndpointsOptions.SectionName));
 builder.Services.Configure<AutoSuggestionOptions>(builder.Configuration.GetSection(AutoSuggestionOptions.SectionName));
+var orchestratorConnectionString = builder.Configuration.GetConnectionString("Orchestrator")
+    ?? "Data Source=orchestrator.db;Cache=Shared;Default Timeout=60";
+var orchestratorUsesSqlServer = DatabaseProvider.IsSqlServer(orchestratorConnectionString);
 builder.Services.AddDbContext<OrchestratorDbContext>(options =>
-    options.UseSqlite(builder.Configuration.GetConnectionString("Orchestrator") ?? "Data Source=orchestrator.db"));
+    DatabaseProvider.ConfigureDbContext(options, orchestratorConnectionString));
 var openAi = builder.Configuration.GetSection(AzureOpenAIOptions.SectionName).Get<AzureOpenAIOptions>() ?? new AzureOpenAIOptions();
 if (openAi.Enabled)
 {
@@ -54,6 +59,7 @@ builder.Services.AddSingleton<McpToolAccessService>();
 builder.Services.AddSingleton<KnowledgeSearchClient>();
 builder.Services.AddSingleton<IKnowledgeSearchClient>(sp => sp.GetRequiredService<KnowledgeSearchClient>());
 builder.Services.AddScoped<AiPipelineService>();
+builder.Services.AddScoped<IAiPipelineService>(sp => sp.GetRequiredService<AiPipelineService>());
 builder.Services.AddScoped<IChatCompletionServiceAccessor>();
 builder.Services.AddScoped<TicketSuggestionService>();
 builder.Services.AddScoped<ITicketSnapshotClient, HttpTicketSnapshotClient>();
@@ -67,12 +73,18 @@ builder.Services.AddMassTransit(mt =>
         {
             r.ConcurrencyMode = ConcurrencyMode.Optimistic;
             r.AddDbContext<DbContext, OrchestratorDbContext>((provider, cfg) =>
-                cfg.UseSqlite(provider.GetRequiredService<IConfiguration>().GetConnectionString("Orchestrator")
-                    ?? "Data Source=orchestrator.db"));
+            {
+                var conn = provider.GetRequiredService<IConfiguration>().GetConnectionString("Orchestrator")
+                    ?? "Data Source=orchestrator.db";
+                DatabaseProvider.ConfigureDbContext(cfg, conn);
+            });
         });
     mt.AddEntityFrameworkOutbox<OrchestratorDbContext>(o =>
     {
-        o.UseSqlite();
+        if (orchestratorUsesSqlServer)
+            o.UseSqlServer();
+        else
+            o.UseSqlite();
         o.UseBusOutbox();
         o.DuplicateDetectionWindow = TimeSpan.FromHours(1);
     });
@@ -82,6 +94,7 @@ builder.Services.AddMassTransit(mt =>
         {
             cfg.UseServiceBusMessageScheduler();
             EndpointConvention.Map<IProposeTicketSuggestion>(new Uri("queue:propose-ticket-suggestion"));
+            EndpointConvention.Map<IGenerateSuggestionRequested>(new Uri("queue:generate-suggestion-requested"));
             cfg.ConfigureEndpoints(ctx);
         });
     }
@@ -91,6 +104,7 @@ builder.Services.AddMassTransit(mt =>
         {
             cfg.UseDelayedMessageScheduler();
             EndpointConvention.Map<IProposeTicketSuggestion>(new Uri("queue:propose-ticket-suggestion"));
+            EndpointConvention.Map<IGenerateSuggestionRequested>(new Uri("queue:generate-suggestion-requested"));
             cfg.ConfigureEndpoints(ctx);
         });
     }
@@ -104,13 +118,14 @@ if (entraEnabled)
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<OrchestratorDbContext>();
-    await db.Database.EnsureCreatedAsync();
+    await DatabaseProvider.EnsureDatabaseReadyAsync(db);
     await OrchestratorDbSchema.EnsureSchemaAsync(db);
 }
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "ai-orchestrator" }))
     .AllowAnonymous();
 app.MapGet("/ready", async (
     IOptions<ServiceBusOptions> sbOpts,
+    IOptions<AutoSuggestionOptions> autoOpts,
     CancellationToken cancellationToken) =>
 {
     var pipeline = await MessagingReadinessPolicy.EvaluatePipelineAsync(sbOpts.Value, cancellationToken);
@@ -124,6 +139,16 @@ app.MapGet("/ready", async (
         ready = true,
         transport = pipeline.Transport,
         detail = pipeline.Detail,
+        messaging = new
+        {
+            sagaConsumerOutbox = autoOpts.Value.UseSagaConsumerOutbox,
+            aiWorkerConsumerOutbox = true,
+            note = autoOpts.Value.UseSagaConsumerOutbox
+                ? "Saga MassTransit Inbox enabled."
+                : orchestratorUsesSqlServer
+                    ? "Saga MassTransit Inbox disabled by config."
+                    : "Saga MassTransit Inbox disabled (SQLite PoC default). Saga uses correlation/AttemptId guards."
+        },
         note = "Chi kiem tra transport/DNS — khong chung minh consumer dang chay. Dung smoke-test cho end-to-end."
     });
 }).AllowAnonymous();
@@ -218,6 +243,44 @@ app.MapGet("/debug/dlq", async (string? queue, IOptions<ServiceBusOptions> sbOpt
         return Results.Ok(new { error = ex.Message, queue = queueName });
     }
 }).AllowAnonymous();
+app.MapGet("/debug/inbox", async (OrchestratorDbContext db) =>
+{
+    var items = await db.Set<InboxState>()
+        .OrderByDescending(x => x.Received)
+        .Take(50)
+        .Select(x => new { x.MessageId, x.ConsumerId, x.Received, x.Consumed, x.ReceiveCount })
+        .ToListAsync();
+    return Results.Ok(items);
+}).AllowAnonymous();
+
+app.MapGet("/debug/ai-generation-attempts", async (string? ticketId, Guid? attemptId, OrchestratorDbContext db) =>
+{
+    var query = db.AiGenerationAttempts.AsQueryable();
+    if (!string.IsNullOrWhiteSpace(ticketId))
+        query = query.Where(x => x.TicketId == ticketId);
+    if (attemptId is not null)
+        query = query.Where(x => x.AttemptId == attemptId);
+    var items = (await query.ToListAsync())
+        .OrderByDescending(x => x.UpdatedAt)
+        .Take(50)
+        .Select(x => new
+        {
+            x.AttemptId,
+            x.SagaId,
+            x.JobId,
+            x.TicketId,
+            x.Status,
+            x.Category,
+            hasSuggestion = !string.IsNullOrWhiteSpace(x.Suggestion),
+            x.Error,
+            x.StartedAt,
+            x.CompletedAt,
+            x.UpdatedAt
+        })
+        .ToList();
+    return Results.Ok(items);
+}).AllowAnonymous();
+
 app.MapGet("/debug/saga-instances", async (string? ticketId, OrchestratorDbContext db) =>
 {
     var query = db.TicketSuggestionSagas.AsQueryable();

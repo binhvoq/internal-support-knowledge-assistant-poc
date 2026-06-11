@@ -12,7 +12,7 @@ Terraform
 Azure
 GitHub
 
-Saga Pattern Orchestration (legacy — PoC dung proposal pipeline auto-suggestion)
+Saga Pattern Orchestration
 Idempotency
 Inbox Pattern
 Outbox Pattern

@@ -10,6 +10,7 @@ using SupportPoc.KnowledgeService.Options;
 using SupportPoc.KnowledgeService.Search;
 using SupportPoc.KnowledgeService.Services;
 using SupportPoc.Shared.Auth;
+using SupportPoc.Shared.Data;
 using SupportPoc.Shared.Messaging;
 using SupportPoc.Shared.Models;
 
@@ -31,8 +32,11 @@ builder.Services.AddSingleton<EmbeddingService>();
 builder.Services.AddSingleton<DocumentBlobStore>();
 builder.Services.AddSingleton<DocumentIngestionStatusRefresher>();
 builder.Services.AddHostedService<DocumentIngestionRefreshBackgroundService>();
+var knowledgeConnectionString = builder.Configuration.GetConnectionString("Knowledge")
+    ?? "Data Source=knowledge.db";
+var knowledgeUsesSqlServer = DatabaseProvider.IsSqlServer(knowledgeConnectionString);
 builder.Services.AddDbContext<KnowledgeDbContext>(options =>
-    options.UseSqlite(builder.Configuration.GetConnectionString("Knowledge") ?? "Data Source=knowledge.db"));
+    DatabaseProvider.ConfigureDbContext(options, knowledgeConnectionString));
 builder.Services.AddCors(options =>
     options.AddDefaultPolicy(p => p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
 
@@ -61,19 +65,23 @@ if (entraEnabled)
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<KnowledgeDbContext>();
-    await db.Database.EnsureCreatedAsync();
-    await db.Database.ExecuteSqlRawAsync("""
-        CREATE TABLE IF NOT EXISTS IdempotencyRecords (
-            Key TEXT NOT NULL,
-            Scope TEXT NOT NULL,
-            RequestHash TEXT NOT NULL,
-            ResponseJson TEXT NOT NULL,
-            StatusCode INTEGER NOT NULL,
-            CreatedAt TEXT NOT NULL,
-            CONSTRAINT PK_IdempotencyRecords PRIMARY KEY (Scope, Key)
-        );
-        """);
-    await EnsureDocumentColumnsAsync(db);
+    await DatabaseProvider.EnsureDatabaseReadyAsync(db);
+    if (!knowledgeUsesSqlServer)
+    {
+        await db.Database.ExecuteSqlRawAsync("""
+            CREATE TABLE IF NOT EXISTS IdempotencyRecords (
+                Key TEXT NOT NULL,
+                Scope TEXT NOT NULL,
+                RequestHash TEXT NOT NULL,
+                ResponseJson TEXT NOT NULL,
+                StatusCode INTEGER NOT NULL,
+                CreatedAt TEXT NOT NULL,
+                CONSTRAINT PK_IdempotencyRecords PRIMARY KEY (Scope, Key)
+            );
+            """);
+    }
+
+    await EnsureDocumentColumnsAsync(db, knowledgeUsesSqlServer);
     if (!await db.Documents.AnyAsync())
     {
         db.Documents.AddRange(SeedData.Documents);
@@ -657,8 +665,11 @@ static async Task WaitForChunkIndexingAsync(
     await db.SaveChangesAsync(cancellationToken);
 }
 
-static async Task EnsureDocumentColumnsAsync(KnowledgeDbContext db)
+static async Task EnsureDocumentColumnsAsync(KnowledgeDbContext db, bool usesSqlServer)
 {
+    if (usesSqlServer)
+        return;
+
     var connection = db.Database.GetDbConnection();
     await connection.OpenAsync();
     try

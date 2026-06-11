@@ -1,5 +1,7 @@
 using MassTransit;
+using MassTransit.EntityFrameworkCoreIntegration;
 using Microsoft.Extensions.Options;
+using SupportPoc.AiOrchestrator.Data;
 using SupportPoc.AiOrchestrator.Options;
 using SupportPoc.Shared.Contracts;
 
@@ -7,6 +9,8 @@ namespace SupportPoc.AiOrchestrator.Saga;
 
 public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<TicketSuggestionSaga>
 {
+    private static readonly Uri GenerateSuggestionEndpoint = new("queue:generate-suggestion-requested");
+
     public State GeneratingSuggestion { get; private set; } = null!;
     public State ApplyingSuggestion { get; private set; } = null!;
     public State Reconciling { get; private set; } = null!;
@@ -60,7 +64,7 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
             When(TicketCreated)
                 .Then(TicketSuggestionActivities.InitializeSaga)
                 .Then(TicketSuggestionActivities.StartNewAttempt)
-                .Publish(ctx => TicketSuggestionActivities.CreateGenerateRequest(ctx))
+                .Send(GenerateSuggestionEndpoint, ctx => TicketSuggestionActivities.CreateGenerateRequest(ctx))
                 .Schedule(StepTimeoutSchedule, ctx => TicketSuggestionActivities.CreateStepTimeout(ctx))
                 .TransitionTo(GeneratingSuggestion));
 
@@ -90,7 +94,7 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                         .TransitionTo(Discarded)
                         )
                     .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Retry, retry => retry
-                        .Publish(ctx => TicketSuggestionActivities.CreateGenerateRequest(ctx))
+                        .Send(GenerateSuggestionEndpoint, ctx => TicketSuggestionActivities.CreateGenerateRequest(ctx))
                         .Schedule(StepTimeoutSchedule, ctx => TicketSuggestionActivities.CreateStepTimeout(ctx))
                         .TransitionTo(GeneratingSuggestion))
                     .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Fail, fail => fail
@@ -111,7 +115,7 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                         .TransitionTo(Discarded)
                         )
                     .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Retry, retry => retry
-                        .Publish(ctx => TicketSuggestionActivities.CreateGenerateRequest(ctx))
+                        .Send(GenerateSuggestionEndpoint, ctx => TicketSuggestionActivities.CreateGenerateRequest(ctx))
                         .Schedule(StepTimeoutSchedule, ctx => TicketSuggestionActivities.CreateStepTimeout(ctx))
                         .TransitionTo(GeneratingSuggestion))
                     .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Fail, fail => fail
@@ -150,7 +154,7 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                     .TransitionTo(Discarded)
                     )
                 .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Retry, retry => retry
-                    .Publish(ctx => TicketSuggestionActivities.CreateGenerateRequest(ctx))
+                    .Send(GenerateSuggestionEndpoint, ctx => TicketSuggestionActivities.CreateGenerateRequest(ctx))
                     .Schedule(StepTimeoutSchedule, ctx => TicketSuggestionActivities.CreateStepTimeout(ctx))
                     .TransitionTo(GeneratingSuggestion))
                 .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Fail, fail => fail
@@ -171,7 +175,7 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                     .TransitionTo(Discarded)
                     )
                 .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Retry, retry => retry
-                    .Publish(ctx => TicketSuggestionActivities.CreateGenerateRequest(ctx))
+                    .Send(GenerateSuggestionEndpoint, ctx => TicketSuggestionActivities.CreateGenerateRequest(ctx))
                     .Schedule(StepTimeoutSchedule, ctx => TicketSuggestionActivities.CreateStepTimeout(ctx))
                     .TransitionTo(GeneratingSuggestion))
                 .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Fail, fail => fail
@@ -192,7 +196,7 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                         .TransitionTo(Discarded)
                         )
                     .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Retry, retry => retry
-                        .Publish(ctx => TicketSuggestionActivities.CreateGenerateRequest(ctx))
+                        .Send(GenerateSuggestionEndpoint, ctx => TicketSuggestionActivities.CreateGenerateRequest(ctx))
                         .Schedule(StepTimeoutSchedule, ctx => TicketSuggestionActivities.CreateStepTimeout(ctx))
                         .TransitionTo(GeneratingSuggestion))
                     .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Fail, fail => fail
@@ -210,37 +214,60 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
 
         During(Completed,
             Ignore(TicketCreated),
+            Ignore(ProposeSuggestion.Completed),
+            Ignore(ProposeSuggestion.Faulted),
+            Ignore(ProposeSuggestion.TimeoutExpired),
             When(SuggestionGenerated)
                 .Then(TicketSuggestionActivities.AuditLateMessageIgnored));
 
         During(Discarded,
             Ignore(TicketCreated),
+            Ignore(ProposeSuggestion.Completed),
+            Ignore(ProposeSuggestion.Faulted),
+            Ignore(ProposeSuggestion.TimeoutExpired),
             When(SuggestionGenerated)
                 .Then(TicketSuggestionActivities.AuditLateMessageIgnored));
 
         During(Failed,
             Ignore(TicketCreated),
+            Ignore(ProposeSuggestion.Completed),
+            Ignore(ProposeSuggestion.Faulted),
+            Ignore(ProposeSuggestion.TimeoutExpired),
             When(SuggestionGenerated)
                 .Then(TicketSuggestionActivities.AuditLateMessageIgnored));
     }
 }
 
-public sealed class TicketSuggestionStateMachineDefinition : SagaDefinition<TicketSuggestionSaga>
+public sealed class TicketSuggestionStateMachineDefinition(IOptions<AutoSuggestionOptions> options)
+    : SagaDefinition<TicketSuggestionSaga>
 {
+    private readonly AutoSuggestionOptions _options = options.Value;
+
     protected override void ConfigureSaga(
         IReceiveEndpointConfigurator endpointConfigurator,
         ISagaConfigurator<TicketSuggestionSaga> sagaConfigurator,
         IRegistrationContext context)
     {
-        endpointConfigurator.UseMessageRetry(r => r.Intervals(500, 2000, 5000));
-
         if (endpointConfigurator is IServiceBusReceiveEndpointConfigurator sb)
         {
+            if (_options.UseSagaConsumerOutbox)
+                sb.PrefetchCount = 0;
             sb.LockDuration = TimeSpan.FromMinutes(5);
             sb.MaxAutoRenewDuration = TimeSpan.FromMinutes(15);
             sb.MaxDeliveryCount = 5;
             sb.ConfigureDeadLetterQueueErrorTransport();
             sb.ConfigureDeadLetterQueueDeadLetterTransport();
         }
+
+        endpointConfigurator.UseMessageRetry(r => r.Intervals(500, 2000, 5000));
+
+        if (_options.UseSagaConsumerOutbox)
+        {
+            endpointConfigurator.ConcurrentMessageLimit = 1;
+            endpointConfigurator.UseEntityFrameworkOutbox<OrchestratorDbContext>(context);
+        }
+        // SQLite PoC default (UseSagaConsumerOutbox=false): saga repository + consumer outbox
+        // contend on orchestrator.db and cause "database table is locked". Saga still dedups via
+        // correlation/AttemptId — not equivalent to MassTransit Inbox. Enable for PostgreSQL/SQL Server.
     }
 }

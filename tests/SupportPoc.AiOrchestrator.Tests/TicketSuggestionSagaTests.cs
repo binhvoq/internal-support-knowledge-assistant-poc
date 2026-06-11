@@ -122,7 +122,7 @@ public sealed class TicketSuggestionSagaTests
         Assert.True(await WaitForPublishedAsync<IAutoSuggestionFailed>(harness, m => m.JobId == jobId, attempts: 200));
 
         var generateCount = 0;
-        foreach (var ctx in harness.Published.Select<IGenerateSuggestionRequested>())
+        foreach (var ctx in harness.Sent.Select<IGenerateSuggestionRequested>())
         {
             if (ctx.Context.Message.JobId == jobId)
                 generateCount++;
@@ -154,6 +154,7 @@ public sealed class TicketSuggestionSagaTests
             .AddSingleton<IKnowledgeSearchClient>(sp => sp.GetRequiredService<KnowledgeSearchClient>())
             .AddScoped<IChatCompletionServiceAccessor>()
             .AddScoped<AiPipelineService>()
+            .AddScoped<IAiPipelineService>(sp => sp.GetRequiredService<AiPipelineService>())
             .AddScoped<ProposeTicketSuggestionApplier>()
             .AddScoped<ITicketSnapshotClient, DbTicketSnapshotClient>();
 
@@ -171,7 +172,8 @@ public sealed class TicketSuggestionSagaTests
             cfg.AddDelayedMessageScheduler();
             cfg.AddSagaStateMachine<TicketSuggestionStateMachine, TicketSuggestionSaga>()
                 .InMemoryRepository();
-            cfg.AddConsumer<GenerateSuggestionRequestedConsumer>();
+            cfg.AddConsumer<GenerateSuggestionRequestedConsumer>()
+                .Endpoint(e => e.Name = "generate-suggestion-requested");
             cfg.AddConsumer<ProposeTicketSuggestionConsumer>()
                 .Endpoint(e => e.Name = "propose-ticket-suggestion");
             cfg.UsingInMemory((context, bus) =>

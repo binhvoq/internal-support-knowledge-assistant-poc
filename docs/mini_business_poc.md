@@ -212,14 +212,17 @@ Pattern nay giup tranh tinh huong database da luu ticket nhung event `TicketCrea
 
 ### Inbox Pattern
 
-AI Orchestrator va cac consumer khac luu event da nhan vao Inbox:
+Runtime Inbox duoc bat bang **MassTransit EF Consumer Outbox** tren receive endpoints (`UseEntityFrameworkOutbox<TDbContext>`), ghi vao bang `InboxState` theo `MessageId` khi consume.
 
-1. Khi nhan message, kiem tra `messageId` hoac `eventId`.
-2. Neu da xu ly thanh cong, skip.
-3. Neu dang xu ly hoac bi loi truoc do, tiep tuc theo retry policy.
-4. Khi Saga xong, mark Inbox record la `Processed`.
+| Endpoint | MassTransit Inbox | Ghi chu |
+|----------|-------------------|---------|
+| `generate-suggestion-requested` (AI worker) | Bat | + `AiGenerationAttempts` theo `AttemptId` |
+| `propose-ticket-suggestion` (TicketService) | Bat | + `ProcessedCommands` theo `CommandId` |
+| Saga (`TicketSuggestionStateMachine`) | **Tat mac dinh** (`AutoSuggestion:UseSagaConsumerOutbox=false`) | SQLite PoC: saga EF repository + consumer outbox tranh chap tren `orchestrator.db` → table locked. Bat bang config cho PostgreSQL/SQL Server production. |
 
-Pattern nay giup Service Bus redelivery khong lam AI tao suggestion nhieu lan cho cung mot ticket.
+Saga van co business guards qua correlation/`AttemptId`, nhung **khong tuong duong** MassTransit Inbox khi config dang off. Kiem tra runtime: `GET /ready` tren AiOrchestrator → `messaging.sagaConsumerOutbox`.
+
+Ngoai transport dedup, AI worker con co **business idempotency** bang bang `AiGenerationAttempts` trong `orchestrator.db` (khoa `AttemptId`) de tranh goi lai Azure OpenAI/Search cho cung mot generate attempt khi process crash o timing xau.
 
 ## 9. Azure AI Search va Vector search
 

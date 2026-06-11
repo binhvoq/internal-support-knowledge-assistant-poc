@@ -74,7 +74,7 @@ public sealed class OrchestratorDbSchemaTests
             await OrchestratorDbSchema.EnsureSchemaAsync(db);
         }
 
-        foreach (var table in new[] { "InboxState", "OutboxMessage", "OutboxState", "TicketSuggestionSagas" })
+        foreach (var table in new[] { "InboxState", "OutboxMessage", "OutboxState", "TicketSuggestionSagas", "AiGenerationAttempts" })
         {
             await using var check = connection.CreateCommand();
             check.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name=$name";

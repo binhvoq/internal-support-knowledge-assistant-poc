@@ -5,6 +5,7 @@ using MassTransit.EntityFrameworkCoreIntegration;
 using Microsoft.EntityFrameworkCore;
 using SupportPoc.Shared.Auth;
 using SupportPoc.Shared.Contracts;
+using SupportPoc.Shared.Data;
 using SupportPoc.Shared.Messaging;
 using SupportPoc.Shared.Models;
 using SupportPoc.TicketService.Consumers;
@@ -18,8 +19,11 @@ if (entraEnabled)
     builder.Services.AddSupportPocEntraAuth(builder.Configuration);
 
 builder.Services.AddSupportPocMessagingOptions(builder.Configuration);
+var ticketsConnectionString = builder.Configuration.GetConnectionString("Tickets")
+    ?? "Data Source=tickets.db;Cache=Shared;Default Timeout=60";
+var ticketsUsesSqlServer = DatabaseProvider.IsSqlServer(ticketsConnectionString);
 builder.Services.AddDbContext<TicketDbContext>(options =>
-    options.UseSqlite(builder.Configuration.GetConnectionString("Tickets") ?? "Data Source=tickets.db"));
+    DatabaseProvider.ConfigureDbContext(options, ticketsConnectionString));
 builder.Services.AddScoped<ProposeTicketSuggestionApplier>();
 builder.Services.AddCors(options =>
     options.AddDefaultPolicy(p => p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
@@ -35,7 +39,10 @@ builder.Services.AddMassTransit(mt =>
     // -> ghi cung transaction voi TicketEntity -> khong con dual-write.
     mt.AddEntityFrameworkOutbox<TicketDbContext>(o =>
     {
-        o.UseSqlite();
+        if (ticketsUsesSqlServer)
+            o.UseSqlServer();
+        else
+            o.UseSqlite();
         o.UseBusOutbox();
         o.DuplicateDetectionWindow = TimeSpan.FromHours(1);
     });
@@ -65,7 +72,7 @@ if (entraEnabled)
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<TicketDbContext>();
-    await db.Database.EnsureCreatedAsync();
+    await DatabaseProvider.EnsureDatabaseReadyAsync(db);
     await TicketDbSchema.EnsureSchemaAsync(db);
     // IdempotencyRecords + Ticket + MassTransit Outbox/Inbox tables tu sinh.
 }

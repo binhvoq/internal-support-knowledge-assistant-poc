@@ -1,5 +1,7 @@
 using MassTransit;
+using MassTransit.EntityFrameworkCoreIntegration;
 using SupportPoc.Shared.Contracts;
+using SupportPoc.TicketService.Data;
 using SupportPoc.TicketService.Services;
 
 namespace SupportPoc.TicketService.Consumers;
@@ -41,5 +43,6 @@ public sealed class ProposeTicketSuggestionConsumerDefinition : ConsumerDefiniti
         IRegistrationContext context)
     {
         endpointConfigurator.UseMessageRetry(r => r.Intervals(100, 500, 1000, 2000));
+        endpointConfigurator.UseEntityFrameworkOutbox<TicketDbContext>(context);
     }
 }

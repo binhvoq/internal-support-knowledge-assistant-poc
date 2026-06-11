@@ -9,8 +9,16 @@ using SupportPoc.Shared.Testing;
 
 namespace SupportPoc.AiOrchestrator.Services;
 
+public interface IAiPipelineService
+{
+    Task<AiPipelineService.PipelineResult> RunAsync(
+        string question,
+        string requestedCategory,
+        CancellationToken cancellationToken);
+}
+
 // Classify + Search + Generate — dung boi GenerateSuggestionRequestedConsumer (saga AI worker).
-public sealed class AiPipelineService
+public sealed class AiPipelineService : IAiPipelineService
 {
     private readonly IKnowledgeSearchClient _knowledge;
     private readonly IChatCompletionService? _chat;

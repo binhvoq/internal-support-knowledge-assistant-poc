@@ -11,7 +11,12 @@ internal static class OrchestratorDbSchema
 
     public static async Task EnsureSchemaAsync(OrchestratorDbContext db, CancellationToken cancellationToken = default)
     {
+        if (db.Database.IsSqlServer())
+            return;
+
+        await ConfigureSqliteConcurrencyAsync(db, cancellationToken);
         await EnsureMassTransitPersistenceTablesAsync(db, cancellationToken);
+        await EnsureAiGenerationAttemptsTableAsync(db, cancellationToken);
 
         if (!await TableExistsAsync(db, "TicketSuggestionSagas", cancellationToken))
         {
@@ -51,6 +56,16 @@ internal static class OrchestratorDbSchema
         await db.Database.ExecuteSqlRawAsync(
             "CREATE INDEX IF NOT EXISTS IX_TicketSuggestionSagas_TicketId ON TicketSuggestionSagas (TicketId);",
             cancellationToken);
+#pragma warning restore EF1003
+    }
+
+    private static async Task ConfigureSqliteConcurrencyAsync(
+        OrchestratorDbContext db,
+        CancellationToken cancellationToken)
+    {
+#pragma warning disable EF1003
+        await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;", cancellationToken);
+        await db.Database.ExecuteSqlRawAsync("PRAGMA busy_timeout=30000;", cancellationToken);
 #pragma warning restore EF1003
     }
 
@@ -103,9 +118,40 @@ internal static class OrchestratorDbSchema
         }
     }
 
+    private static async Task EnsureAiGenerationAttemptsTableAsync(
+        OrchestratorDbContext db,
+        CancellationToken cancellationToken)
+    {
+        if (await TableExistsAsync(db, "AiGenerationAttempts", cancellationToken))
+            return;
+
+#pragma warning disable EF1003
+        await db.Database.ExecuteSqlRawAsync(
+            """
+            CREATE TABLE IF NOT EXISTS AiGenerationAttempts (
+                AttemptId TEXT NOT NULL PRIMARY KEY,
+                SagaId TEXT NOT NULL,
+                JobId TEXT NOT NULL,
+                TicketId TEXT NOT NULL,
+                Status TEXT NOT NULL,
+                Category TEXT NULL,
+                Suggestion TEXT NULL,
+                RelatedDocumentsJson TEXT NOT NULL DEFAULT '[]',
+                Error TEXT NULL,
+                StartedAt TEXT NOT NULL,
+                CompletedAt TEXT NULL,
+                UpdatedAt TEXT NOT NULL
+            );
+            """,
+            cancellationToken);
+#pragma warning restore EF1003
+    }
+
     private static bool RelatesToOrchestratorPersistence(string statement)
     {
         if (statement.Contains("TicketSuggestionSagas", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (statement.Contains("AiGenerationAttempts", StringComparison.OrdinalIgnoreCase))
             return true;
         return MassTransitTables.Any(t => statement.Contains(t, StringComparison.OrdinalIgnoreCase));
     }

@@ -6,6 +6,14 @@ internal static class TicketDbSchema
 {
     public static async Task EnsureSchemaAsync(TicketDbContext db, CancellationToken cancellationToken = default)
     {
+        if (db.Database.IsSqlServer())
+            return;
+
+#pragma warning disable EF1003
+        await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;", cancellationToken);
+        await db.Database.ExecuteSqlRawAsync("PRAGMA busy_timeout=30000;", cancellationToken);
+#pragma warning restore EF1003
+
         var columns = await GetColumnsAsync(db, "Tickets", cancellationToken);
 
         if (!columns.Contains("OwnerOid"))
