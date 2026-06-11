@@ -6,19 +6,11 @@
     }
   },
   "ConnectionStrings": {
-    "Orchestrator": "Server=localhost,1433;Database=supportpoc_orchestrator;User Id=sa;Password=SupportPoc_LocalSql1!;TrustServerCertificate=True;"
+    "Knowledge": "Server=localhost,1433;Database=supportpoc_knowledge;User Id=sa;Password=SupportPoc_LocalSql1!;TrustServerCertificate=True;"
   },
   "ServiceBus": {
     "ConnectionString": "Endpoint=sb://localhost;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;",
     "TopicName": "support-events"
-  },
-  "LocalMessaging": {
-    "TicketServiceBaseUrl": "http://localhost:5001"
-  },
-  "AzureOpenAI": {
-    "Endpoint": "",
-    "ApiKey": "",
-    "ChatEnabled": false
   },
   "AzureAd": {
     "Enabled": false

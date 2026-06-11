@@ -5,24 +5,24 @@ namespace SupportPoc.Shared.Data;
 
 public static class DatabaseProvider
 {
-    public static bool IsSqlServer(string? connectionString) =>
-        !string.IsNullOrWhiteSpace(connectionString)
-        && connectionString.Contains("Server=", StringComparison.OrdinalIgnoreCase);
+    public const string DefaultTicketsConnection =
+        "Server=localhost,1433;Database=supportpoc_tickets;User Id=sa;Password=SupportPoc_LocalSql1!;TrustServerCertificate=True;";
 
-    public static void ConfigureDbContext(DbContextOptionsBuilder options, string connectionString)
-    {
-        if (IsSqlServer(connectionString))
-            options.UseSqlServer(connectionString);
-        else
-            options.UseSqlite(connectionString);
-    }
+    public const string DefaultOrchestratorConnection =
+        "Server=localhost,1433;Database=supportpoc_orchestrator;User Id=sa;Password=SupportPoc_LocalSql1!;TrustServerCertificate=True;";
+
+    public const string DefaultKnowledgeConnection =
+        "Server=localhost,1433;Database=supportpoc_knowledge;User Id=sa;Password=SupportPoc_LocalSql1!;TrustServerCertificate=True;";
+
+    public static void ConfigureDbContext(DbContextOptionsBuilder options, string connectionString) =>
+        options.UseSqlServer(connectionString);
 
     public static async Task EnsureDatabaseReadyAsync(
         DbContext db,
         CancellationToken cancellationToken = default)
     {
         var connectionString = db.Database.GetConnectionString();
-        if (IsSqlServer(connectionString) && !string.IsNullOrWhiteSpace(connectionString))
+        if (!string.IsNullOrWhiteSpace(connectionString))
             await EnsureSqlServerDatabaseExistsAsync(connectionString, cancellationToken);
 
         await db.Database.EnsureCreatedAsync(cancellationToken);

@@ -32,8 +32,7 @@ builder.Services.Configure<AzureOpenAIOptions>(builder.Configuration.GetSection(
 builder.Services.Configure<ServiceEndpointsOptions>(builder.Configuration.GetSection(ServiceEndpointsOptions.SectionName));
 builder.Services.Configure<AutoSuggestionOptions>(builder.Configuration.GetSection(AutoSuggestionOptions.SectionName));
 var orchestratorConnectionString = builder.Configuration.GetConnectionString("Orchestrator")
-    ?? "Data Source=orchestrator.db;Cache=Shared;Default Timeout=60";
-var orchestratorUsesSqlServer = DatabaseProvider.IsSqlServer(orchestratorConnectionString);
+    ?? DatabaseProvider.DefaultOrchestratorConnection;
 builder.Services.AddDbContext<OrchestratorDbContext>(options =>
     DatabaseProvider.ConfigureDbContext(options, orchestratorConnectionString));
 var openAi = builder.Configuration.GetSection(AzureOpenAIOptions.SectionName).Get<AzureOpenAIOptions>() ?? new AzureOpenAIOptions();
@@ -75,16 +74,13 @@ builder.Services.AddMassTransit(mt =>
             r.AddDbContext<DbContext, OrchestratorDbContext>((provider, cfg) =>
             {
                 var conn = provider.GetRequiredService<IConfiguration>().GetConnectionString("Orchestrator")
-                    ?? "Data Source=orchestrator.db";
+                    ?? DatabaseProvider.DefaultOrchestratorConnection;
                 DatabaseProvider.ConfigureDbContext(cfg, conn);
             });
         });
     mt.AddEntityFrameworkOutbox<OrchestratorDbContext>(o =>
     {
-        if (orchestratorUsesSqlServer)
-            o.UseSqlServer();
-        else
-            o.UseSqlite();
+        o.UseSqlServer();
         o.UseBusOutbox();
         o.DuplicateDetectionWindow = TimeSpan.FromHours(1);
     });
@@ -119,13 +115,11 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<OrchestratorDbContext>();
     await DatabaseProvider.EnsureDatabaseReadyAsync(db);
-    await OrchestratorDbSchema.EnsureSchemaAsync(db);
 }
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "ai-orchestrator" }))
     .AllowAnonymous();
 app.MapGet("/ready", async (
     IOptions<ServiceBusOptions> sbOpts,
-    IOptions<AutoSuggestionOptions> autoOpts,
     CancellationToken cancellationToken) =>
 {
     var pipeline = await MessagingReadinessPolicy.EvaluatePipelineAsync(sbOpts.Value, cancellationToken);
@@ -141,13 +135,9 @@ app.MapGet("/ready", async (
         detail = pipeline.Detail,
         messaging = new
         {
-            sagaConsumerOutbox = autoOpts.Value.UseSagaConsumerOutbox,
+            sagaConsumerOutbox = true,
             aiWorkerConsumerOutbox = true,
-            note = autoOpts.Value.UseSagaConsumerOutbox
-                ? "Saga MassTransit Inbox enabled."
-                : orchestratorUsesSqlServer
-                    ? "Saga MassTransit Inbox disabled by config."
-                    : "Saga MassTransit Inbox disabled (SQLite PoC default). Saga uses correlation/AttemptId guards."
+            note = "Saga MassTransit Inbox enabled (SQL Server)."
         },
         note = "Chi kiem tra transport/DNS — khong chung minh consumer dang chay. Dung smoke-test cho end-to-end."
     });

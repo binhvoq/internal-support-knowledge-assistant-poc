@@ -517,7 +517,7 @@ As a Developer, I want Ticket Service to write events to an outbox, so that tick
 
 #### Technical notes
 
-- Co the dung SQLite table `OutboxMessages` cho PoC local.
+- Outbox/Inbox dung bang MassTransit (`OutboxMessage`, `InboxState`) tren SQL Server local.
 - Azure target co the map sang Azure SQL/Cosmos DB.
 - Pattern nay bo sung cho Event-Driven Architecture.
 

@@ -218,11 +218,11 @@ Runtime Inbox duoc bat bang **MassTransit EF Consumer Outbox** tren receive endp
 |----------|-------------------|---------|
 | `generate-suggestion-requested` (AI worker) | Bat | + `AiGenerationAttempts` theo `AttemptId` |
 | `propose-ticket-suggestion` (TicketService) | Bat | + `ProcessedCommands` theo `CommandId` |
-| Saga (`TicketSuggestionStateMachine`) | **Tat mac dinh** (`AutoSuggestion:UseSagaConsumerOutbox=false`) | SQLite PoC: saga EF repository + consumer outbox tranh chap tren `orchestrator.db` → table locked. Bat bang config cho PostgreSQL/SQL Server production. |
+| Saga (`TicketSuggestionStateMachine`) | Bat | SQL Server local; + correlation/`AttemptId` cho late messages |
 
-Saga van co business guards qua correlation/`AttemptId`, nhung **khong tuong duong** MassTransit Inbox khi config dang off. Kiem tra runtime: `GET /ready` tren AiOrchestrator → `messaging.sagaConsumerOutbox`.
+Kiem tra runtime: `GET /ready` tren AiOrchestrator → `messaging.sagaConsumerOutbox` = `true`.
 
-Ngoai transport dedup, AI worker con co **business idempotency** bang bang `AiGenerationAttempts` trong `orchestrator.db` (khoa `AttemptId`) de tranh goi lai Azure OpenAI/Search cho cung mot generate attempt khi process crash o timing xau.
+Ngoai transport dedup, AI worker con co **business idempotency** bang bang `AiGenerationAttempts` trong `supportpoc_orchestrator` (khoa `AttemptId`) de tranh goi lai Azure OpenAI/Search cho cung mot generate attempt khi process crash o timing xau.
 
 ## 9. Azure AI Search va Vector search
 
@@ -445,25 +445,26 @@ GitHub Actions toi thieu:
 - Tool: `list_support_categories`
 - Tool policy contract: role nao duoc advertise/call tool nao; AI Orchestrator chi dua allowed tools cho LLM.
 
-## 17. Local messaging va Azure Service Bus Emulator
+## 17. Local dev: SQL Server + Azure Service Bus Emulator
 
-Local dev **mac dinh** di theo reliable path giong production: MassTransit EntityFramework Outbox + Azure Service Bus transport.
+Local dev **mac dinh** dung **SQL Server** (`localhost:1433`, `sa` / `SupportPoc_LocalSql1!`) va reliable path giong production: MassTransit EntityFramework Outbox/Inbox + Azure Service Bus transport.
 
 ### Reliable path (Outbox guarantee)
 
-1. Cau hinh `ServiceBus.ConnectionString` cho Azure Service Bus that **hoac** Azure Service Bus Emulator.
-2. Mau local (copy tu `appsettings.Development.json.example`):
+1. Khoi dong Docker stack: `docker compose -f .emulator/docker-compose.yml up -d` (SQL Server + Service Bus emulator). Connection strings mac dinh nam trong `appsettings.json` tung service (`supportpoc_tickets`, `supportpoc_orchestrator`, `supportpoc_knowledge`).
+2. Cau hinh `ServiceBus.ConnectionString` cho Azure Service Bus that **hoac** Azure Service Bus Emulator.
+3. Mau local (copy tu `appsettings.Development.json.example`):
 
 ```text
 Endpoint=sb://localhost;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;
 ```
 
-3. Khoi dong emulator truoc backend (Docker — xem [Test locally with the Azure Service Bus emulator](https://learn.microsoft.com/en-us/azure/service-bus-messaging/test-locally-with-service-bus-emulator)):
+4. Khoi dong emulator truoc backend (Docker — xem [Test locally with the Azure Service Bus emulator](https://learn.microsoft.com/en-us/azure/service-bus-messaging/test-locally-with-service-bus-emulator)):
    - Clone [azure-service-bus-emulator-installer](https://github.com/Azure/azure-service-bus-emulator-installer) va chay `docker compose up` (can Docker + Linux containers tren Windows).
    - Messaging runtime dung `sb://localhost` (khong can port trong connection string).
    - Administration Client / debug DLQ co the can `sb://localhost:5300` — app tu xu ly qua `GetAdministrationConnectionString()`.
-4. `POST /tickets` goi `publish.Publish<ITicketCreated>` — ticket va `OutboxMessage` cung transaction.
-5. AiOrchestrator nhan `TicketCreated` qua bus, khong qua HTTP.
+5. `POST /tickets` goi `publish.Publish<ITicketCreated>` — ticket va `OutboxMessage` cung transaction.
+6. AiOrchestrator nhan `TicketCreated` qua bus, khong qua HTTP. Saga consumer inbox luon bat (`GET /ready` → `messaging.sagaConsumerOutbox: true`).
 
 ### Acceptance criteria Outbox
 

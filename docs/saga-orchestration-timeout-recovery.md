@@ -72,15 +72,7 @@ GET http://localhost:5003/debug/saga?ticketId={ticketId}
 
 ### Unit test (khong can Azure)
 
-```bash
-dotnet test tests/SupportPoc.AiOrchestrator.Tests   # policy 4 buoc + probe unavailable Compensating
-dotnet test tests/SupportPoc.TicketService.Tests      # compensate idempotent already reverted
-```
-
-| Test | Chung minh |
-|------|------------|
-| `Compensating_probe_unavailable_retries_before_fail` | 503 → RetryVerify, het retry → Fail "unable to verify" |
-| `Already_reverted_ticket_publishes_reverted_without_mutating` | Resend compensate khong mutate sai |
+> **Luu y (2026-06):** Cac integration test saga/compensate cu da duoc go bo khi chuyen SQL Server-only. Chay `dotnet test` cho unit test hien tai (pipeline AI, MCP security, business rules).
 
 ### Chay local + Azure
 

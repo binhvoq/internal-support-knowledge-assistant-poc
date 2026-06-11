@@ -9,7 +9,7 @@ Admin can upload internal policy PDFs into the knowledge base. The AI assistant 
 **App responsibilities**
 
 - `Knowledge Admin` UI: upload PDF, title/category, status, delete.
-- `KnowledgeService`: store document metadata in SQLite, upload **original PDF** (or `.txt` for manual text docs) to Azure Blob with metadata, trigger Azure AI Search indexer, poll chunk visibility, expose `/search` for hybrid retrieval.
+- `KnowledgeService`: store document metadata in SQL Server, upload **original PDF** (or `.txt` for manual text docs) to Azure Blob with metadata, trigger Azure AI Search indexer, poll chunk visibility, expose `/search` for hybrid retrieval.
 - `AiOrchestrator`: query `/search`, inject **top chunks** (not full PDF) into LLM prompts.
 
 **Azure responsibilities**
@@ -67,7 +67,7 @@ App **does not** use PdfPig or app-side document embedding for PDF ingestion any
 
 1. Delete all chunks where `documentId eq '{id}'` from Azure AI Search.
 2. Delete blob `{documentId}/{fileName}`.
-3. Delete SQLite row.
+3. Delete SQL Server document row.
 
 If chunk deletion fails, DB row is kept.
 

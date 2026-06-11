@@ -1,5 +1,7 @@
 # Support PoC — Frontend
 
+Backend local can **SQL Server + Service Bus emulator** (Docker). Xem [`../scripts/README.md`](../scripts/README.md).
+
 ## Đăng nhập Entra + gọi API (Zero Trust)
 
 ```bash

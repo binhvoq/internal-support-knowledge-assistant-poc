@@ -33,8 +33,7 @@ builder.Services.AddSingleton<DocumentBlobStore>();
 builder.Services.AddSingleton<DocumentIngestionStatusRefresher>();
 builder.Services.AddHostedService<DocumentIngestionRefreshBackgroundService>();
 var knowledgeConnectionString = builder.Configuration.GetConnectionString("Knowledge")
-    ?? "Data Source=knowledge.db";
-var knowledgeUsesSqlServer = DatabaseProvider.IsSqlServer(knowledgeConnectionString);
+    ?? DatabaseProvider.DefaultKnowledgeConnection;
 builder.Services.AddDbContext<KnowledgeDbContext>(options =>
     DatabaseProvider.ConfigureDbContext(options, knowledgeConnectionString));
 builder.Services.AddCors(options =>
@@ -66,22 +65,6 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<KnowledgeDbContext>();
     await DatabaseProvider.EnsureDatabaseReadyAsync(db);
-    if (!knowledgeUsesSqlServer)
-    {
-        await db.Database.ExecuteSqlRawAsync("""
-            CREATE TABLE IF NOT EXISTS IdempotencyRecords (
-                Key TEXT NOT NULL,
-                Scope TEXT NOT NULL,
-                RequestHash TEXT NOT NULL,
-                ResponseJson TEXT NOT NULL,
-                StatusCode INTEGER NOT NULL,
-                CreatedAt TEXT NOT NULL,
-                CONSTRAINT PK_IdempotencyRecords PRIMARY KEY (Scope, Key)
-            );
-            """);
-    }
-
-    await EnsureDocumentColumnsAsync(db, knowledgeUsesSqlServer);
     if (!await db.Documents.AnyAsync())
     {
         db.Documents.AddRange(SeedData.Documents);
@@ -663,45 +646,6 @@ static async Task WaitForChunkIndexingAsync(
     }
 
     await db.SaveChangesAsync(cancellationToken);
-}
-
-static async Task EnsureDocumentColumnsAsync(KnowledgeDbContext db, bool usesSqlServer)
-{
-    if (usesSqlServer)
-        return;
-
-    var connection = db.Database.GetDbConnection();
-    await connection.OpenAsync();
-    try
-    {
-        var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        await using (var command = connection.CreateCommand())
-        {
-            command.CommandText = "PRAGMA table_info(Documents);";
-            await using var reader = await command.ExecuteReaderAsync();
-            while (await reader.ReadAsync())
-                existing.Add(reader.GetString(1));
-        }
-
-        foreach (var (name, definition) in new[]
-        {
-            ("FileName", "TEXT"),
-            ("ContentType", "TEXT"),
-            ("IngestionStatus", "TEXT NOT NULL DEFAULT 'Ready'"),
-            ("IngestionMessage", "TEXT"),
-            ("IngestedAt", "TEXT")
-        })
-        {
-            if (existing.Contains(name)) continue;
-            await using var alter = connection.CreateCommand();
-            alter.CommandText = $"ALTER TABLE Documents ADD COLUMN {name} {definition};";
-            await alter.ExecuteNonQueryAsync();
-        }
-    }
-    finally
-    {
-        await connection.CloseAsync();
-    }
 }
 
 static async Task SeedDemoPdfAsync(

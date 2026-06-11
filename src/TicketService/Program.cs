@@ -20,8 +20,7 @@ if (entraEnabled)
 
 builder.Services.AddSupportPocMessagingOptions(builder.Configuration);
 var ticketsConnectionString = builder.Configuration.GetConnectionString("Tickets")
-    ?? "Data Source=tickets.db;Cache=Shared;Default Timeout=60";
-var ticketsUsesSqlServer = DatabaseProvider.IsSqlServer(ticketsConnectionString);
+    ?? DatabaseProvider.DefaultTicketsConnection;
 builder.Services.AddDbContext<TicketDbContext>(options =>
     DatabaseProvider.ConfigureDbContext(options, ticketsConnectionString));
 builder.Services.AddScoped<ProposeTicketSuggestionApplier>();
@@ -39,10 +38,7 @@ builder.Services.AddMassTransit(mt =>
     // -> ghi cung transaction voi TicketEntity -> khong con dual-write.
     mt.AddEntityFrameworkOutbox<TicketDbContext>(o =>
     {
-        if (ticketsUsesSqlServer)
-            o.UseSqlServer();
-        else
-            o.UseSqlite();
+        o.UseSqlServer();
         o.UseBusOutbox();
         o.DuplicateDetectionWindow = TimeSpan.FromHours(1);
     });
@@ -73,7 +69,6 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<TicketDbContext>();
     await DatabaseProvider.EnsureDatabaseReadyAsync(db);
-    await TicketDbSchema.EnsureSchemaAsync(db);
     // IdempotencyRecords + Ticket + MassTransit Outbox/Inbox tables tu sinh.
 }
 

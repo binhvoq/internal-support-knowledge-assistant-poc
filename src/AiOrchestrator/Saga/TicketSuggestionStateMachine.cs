@@ -238,11 +238,8 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
     }
 }
 
-public sealed class TicketSuggestionStateMachineDefinition(IOptions<AutoSuggestionOptions> options)
-    : SagaDefinition<TicketSuggestionSaga>
+public sealed class TicketSuggestionStateMachineDefinition : SagaDefinition<TicketSuggestionSaga>
 {
-    private readonly AutoSuggestionOptions _options = options.Value;
-
     protected override void ConfigureSaga(
         IReceiveEndpointConfigurator endpointConfigurator,
         ISagaConfigurator<TicketSuggestionSaga> sagaConfigurator,
@@ -250,8 +247,7 @@ public sealed class TicketSuggestionStateMachineDefinition(IOptions<AutoSuggesti
     {
         if (endpointConfigurator is IServiceBusReceiveEndpointConfigurator sb)
         {
-            if (_options.UseSagaConsumerOutbox)
-                sb.PrefetchCount = 0;
+            sb.PrefetchCount = 0;
             sb.LockDuration = TimeSpan.FromMinutes(5);
             sb.MaxAutoRenewDuration = TimeSpan.FromMinutes(15);
             sb.MaxDeliveryCount = 5;
@@ -260,14 +256,7 @@ public sealed class TicketSuggestionStateMachineDefinition(IOptions<AutoSuggesti
         }
 
         endpointConfigurator.UseMessageRetry(r => r.Intervals(500, 2000, 5000));
-
-        if (_options.UseSagaConsumerOutbox)
-        {
-            endpointConfigurator.ConcurrentMessageLimit = 1;
-            endpointConfigurator.UseEntityFrameworkOutbox<OrchestratorDbContext>(context);
-        }
-        // SQLite PoC default (UseSagaConsumerOutbox=false): saga repository + consumer outbox
-        // contend on orchestrator.db and cause "database table is locked". Saga still dedups via
-        // correlation/AttemptId — not equivalent to MassTransit Inbox. Enable for PostgreSQL/SQL Server.
+        endpointConfigurator.ConcurrentMessageLimit = 1;
+        endpointConfigurator.UseEntityFrameworkOutbox<OrchestratorDbContext>(context);
     }
 }
