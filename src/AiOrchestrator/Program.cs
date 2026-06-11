@@ -58,7 +58,6 @@ builder.Services.AddScoped<IChatCompletionServiceAccessor>();
 builder.Services.AddScoped<TicketSuggestionService>();
 builder.Services.AddScoped<ITicketSnapshotClient, HttpTicketSnapshotClient>();
 var serviceBus = builder.Configuration.GetSection(ServiceBusOptions.SectionName).Get<ServiceBusOptions>() ?? new ServiceBusOptions();
-var localMessaging = MessagingOptionsExtensions.ResolveLocalMessaging(builder.Configuration);
 builder.Services.AddMassTransit(mt =>
 {
     mt.AddDelayedMessageScheduler();
@@ -111,16 +110,13 @@ using (var scope = app.Services.CreateScope())
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "ai-orchestrator" }))
     .AllowAnonymous();
 app.MapGet("/ready", async (
-    IHostEnvironment env,
     IOptions<ServiceBusOptions> sbOpts,
-    IOptions<LocalMessagingOptions> localOpts,
     CancellationToken cancellationToken) =>
 {
-    var pipeline = await DevBridgeEndpointPolicy.EvaluatePipelineAsync(
-        env, sbOpts.Value, localOpts.Value, cancellationToken);
+    var pipeline = await MessagingReadinessPolicy.EvaluatePipelineAsync(sbOpts.Value, cancellationToken);
     if (!pipeline.Ready)
         return Results.Json(
-            new { ready = false, transport = pipeline.Transport, detail = pipeline.Detail, httpBridge = pipeline.HttpBridge },
+            new { ready = false, transport = pipeline.Transport, detail = pipeline.Detail },
             statusCode: StatusCodes.Status503ServiceUnavailable);
 
     return Results.Ok(new
@@ -128,21 +124,9 @@ app.MapGet("/ready", async (
         ready = true,
         transport = pipeline.Transport,
         detail = pipeline.Detail,
-        httpBridge = pipeline.HttpBridge,
-        note = "Chi kiem tra transport/DNS hoac cau hinh bridge — khong chung minh consumer dang chay. Dung smoke-test cho end-to-end."
+        note = "Chi kiem tra transport/DNS — khong chung minh consumer dang chay. Dung smoke-test cho end-to-end."
     });
 }).AllowAnonymous();
-if (DevBridgeEndpointPolicy.IsEnabled(app.Environment, localMessaging, serviceBus))
-{
-    app.MapPost("/internal/dev/ticket-created", async (HttpContext httpContext, TicketCreated message, IBus bus) =>
-    {
-        if (!DevBridgeEndpointPolicy.IsLocalCaller(httpContext))
-            return DevBridgeEndpointPolicy.RejectDisabled();
-
-        await bus.Publish<ITicketCreated>(message);
-        return Results.Accepted();
-    }).AllowAnonymous();
-}
 static string MapSagaStatusForUi(string? currentState) => currentState switch
 {
     SagaProcessState.GeneratingSuggestion => AutoSuggestionJobStatus.Running,

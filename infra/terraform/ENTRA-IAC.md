@@ -1,8 +1,6 @@
 # Entra ID — 100% Terraform (IaC)
 
-Terraform (`identity.tf`) là **nguồn sự thật duy nhất** cho app registrations Entra của PoC này.
-
-Script `scripts/provision-entra.sh` chỉ còn lịch sử / khẩn cấp; **không** chạy song song với Terraform trên cùng tenant (sẽ trùng app hoặc lệch state).
+Terraform (`identity.tf`) là **nguồn sự thật duy nhất** cho app registrations Entra của PoC này. Repo không còn giữ shell script provision Entra song song với Terraform.
 
 ## Điều kiện
 
@@ -20,10 +18,9 @@ terraform init
 terraform plan
 terraform apply
 cd ../..
-bash scripts/sync-config.sh
 ```
 
-Sau `apply`, `config/azure.local.json` có block `entra` (nếu `write_local_config = true`). Chạy `sync-config.sh` để đẩy sang `appsettings` và `frontend/.env.local`.
+Sau `apply`, `config/azure.local.json` có block `entra` (nếu `write_local_config = true`). Copy các giá trị cần thiết trực tiếp vào `appsettings.Development.json`, user-secrets và `frontend/.env.local`.
 
 **Lưu ý:** Client ID mới → MSAL redirect vẫn đúng nếu `spa_redirect_uris` khớp; user phải consent lại.
 

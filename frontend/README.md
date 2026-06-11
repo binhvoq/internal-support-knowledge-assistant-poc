@@ -3,9 +3,8 @@
 ## Đăng nhập Entra + gọi API (Zero Trust)
 
 ```bash
-bash scripts/provision-entra.sh   # một lần
-bash scripts/sync-config.sh       # tạo frontend/.env.local + AzureAd backend
-bash scripts/restart-services.sh  # 4 backend :5001-5004
+# Configure Entra/Azure values directly in appsettings.Development.json, user-secrets,
+# and frontend/.env.local. See ../scripts/README.md for the direct-command policy.
 cd frontend && npm install && npm run dev
 ```
 

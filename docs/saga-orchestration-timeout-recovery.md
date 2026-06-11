@@ -85,9 +85,9 @@ dotnet test tests/SupportPoc.TicketService.Tests      # compensate idempotent al
 ### Chay local + Azure
 
 ```bash
-bash scripts/azure-resources-start.sh   # neu chua co config
-bash scripts/restart-services.sh
-bash scripts/smoke-test.sh              # happy path E2E
+# Start required Azure resources or the local Service Bus emulator directly.
+# Then run backend services with dotnet run and verify endpoints with Invoke-RestMethod.
+# See scripts/README.md for the direct-command policy.
 ```
 
 Smoke test khong cover fault injection — chi `New → Suggested → Resolved`.

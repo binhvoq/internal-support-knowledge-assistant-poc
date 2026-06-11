@@ -1,6 +1,6 @@
 # Terraform
 
-Terraform is the preferred path for Azure **and Microsoft Entra ID** resources in this PoC. Legacy scripts in `../../scripts` remain for refresh/sync until fully migrated.
+Terraform is the preferred path for Azure **and Microsoft Entra ID** resources in this PoC. The repo no longer keeps shell scripts; run follow-up commands directly and document repeatable sequences in `../../scripts/README.md`.
 
 **Identity roadmap:** [`../../docs/zero-trust-identity.md`](../../docs/zero-trust-identity.md)
 
@@ -44,10 +44,9 @@ After apply:
 
 ```bash
 cd ../..
-bash scripts/sync-config.sh
-bash scripts/restart-services.sh
-# Entra login in app — after backend/frontend JWT work (see docs/zero-trust-identity.md)
-bash scripts/smoke-test.sh
+# Copy values from config/azure.local.json into appsettings.Development.json,
+# dotnet user-secrets, and frontend/.env.local as needed.
+# Then run backend/frontend services directly; see scripts/README.md.
 ```
 
 `terraform apply` writes `config/azure.local.json` by default (`write_local_config = true`). Set `write_local_config = false` to skip the local file.

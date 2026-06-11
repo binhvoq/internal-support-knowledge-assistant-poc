@@ -462,22 +462,16 @@ Endpoint=sb://localhost;SharedAccessKeyName=RootManageSharedAccessKey;SharedAcce
 4. `POST /tickets` goi `publish.Publish<ITicketCreated>` — ticket va `OutboxMessage` cung transaction.
 5. AiOrchestrator nhan `TicketCreated` qua bus, khong qua HTTP.
 
-### HTTP dev bridge (debug only — khong Outbox)
-
-- Chi bat khi **co y**: `USE_HTTP_BRIDGE=true` hoac `LocalMessaging:HttpBridgeEnabled=true` **va** `ServiceBus.ConnectionString` trong.
-- TicketService **bo qua** Outbox publish, commit ticket, roi goi HTTP sang `/internal/dev/ticket-created`.
-- Neu HTTP fail, ticket van ton tai nhung auto-suggestion co the mat — day la han che co y cua shortcut, **khong** dung cho acceptance criteria Outbox.
-
 ### Acceptance criteria Outbox
 
-Chay qua Service Bus Emulator hoac Azure Service Bus that. **Khong** dung HTTP bridge de chung minh Outbox.
+Chay qua Service Bus Emulator hoac Azure Service Bus that.
 
 ## 18. Acceptance criteria
 
 PoC duoc xem la dat khi:
 
 - React app tao duoc ticket moi.
-- Ticket Service ghi duoc Outbox va publish duoc event `TicketCreated` (qua Service Bus / emulator, khong qua HTTP bridge).
+- Ticket Service ghi duoc Outbox va publish duoc event `TicketCreated` (qua Service Bus / emulator).
 - AI Orchestrator nhan event va sinh duoc `aiSuggestedAnswer`.
 - AI Orchestrator co Inbox de tranh xu ly lap lai event.
 - Saga tao suggestion co state ro rang va co fallback khi search/LLM loi.

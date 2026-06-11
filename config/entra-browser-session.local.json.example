@@ -5,7 +5,7 @@
     "whyNoReloginOnRefresh": "MSAL cache trong sessionStorage (msal.*) + refresh token.",
     "nextStepsForAi": [
       "Doc day du: docs/zero-trust-identity.md — PoC Identity DA CHOT (§0, §5); PIM/Identity Protection/CA out-of-scope (§13-§14)",
-      "Restart: bash scripts/restart-services.sh",
+      "Restart backend services directly with dotnet run; see scripts/README.md",
       "E2E: login UI hoac dung apiAccessToken trong file that"
     ]
   },

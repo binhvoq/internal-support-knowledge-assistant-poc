@@ -20,15 +20,12 @@ if (entraEnabled)
 builder.Services.AddSupportPocMessagingOptions(builder.Configuration);
 builder.Services.AddDbContext<TicketDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("Tickets") ?? "Data Source=tickets.db"));
-builder.Services.AddHttpClient(OrchestratorDevBridge.HttpClientName);
 builder.Services.AddScoped<ProposeTicketSuggestionApplier>();
-builder.Services.AddScoped<OrchestratorDevBridge>();
 builder.Services.AddCors(options =>
     options.AddDefaultPolicy(p => p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
 
 // ---------- MassTransit ----------
 var serviceBus = builder.Configuration.GetSection(ServiceBusOptions.SectionName).Get<ServiceBusOptions>() ?? new ServiceBusOptions();
-var localMessaging = MessagingOptionsExtensions.ResolveLocalMessaging(builder.Configuration);
 
 builder.Services.AddMassTransit(mt =>
 {
@@ -79,16 +76,13 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "ticket-se
     .AllowAnonymous();
 
 app.MapGet("/ready", async (
-    IHostEnvironment env,
     Microsoft.Extensions.Options.IOptions<ServiceBusOptions> sbOpts,
-    Microsoft.Extensions.Options.IOptions<LocalMessagingOptions> localOpts,
     CancellationToken cancellationToken) =>
 {
-    var pipeline = await DevBridgeEndpointPolicy.EvaluatePipelineAsync(
-        env, sbOpts.Value, localOpts.Value, cancellationToken);
+    var pipeline = await MessagingReadinessPolicy.EvaluatePipelineAsync(sbOpts.Value, cancellationToken);
     if (!pipeline.Ready)
         return Results.Json(
-            new { ready = false, transport = pipeline.Transport, detail = pipeline.Detail, httpBridge = pipeline.HttpBridge },
+            new { ready = false, transport = pipeline.Transport, detail = pipeline.Detail },
             statusCode: StatusCodes.Status503ServiceUnavailable);
 
     return Results.Ok(new
@@ -96,25 +90,9 @@ app.MapGet("/ready", async (
         ready = true,
         transport = pipeline.Transport,
         detail = pipeline.Detail,
-        httpBridge = pipeline.HttpBridge,
-        note = "Chi kiem tra transport/DNS hoac cau hinh bridge — khong chung minh consumer dang chay. Dung smoke-test cho end-to-end."
+        note = "Chi kiem tra transport/DNS — khong chung minh consumer dang chay. Dung smoke-test cho end-to-end."
     });
 }).AllowAnonymous();
-
-if (DevBridgeEndpointPolicy.IsEnabled(app.Environment, localMessaging, serviceBus))
-{
-    app.MapPost("/internal/dev/propose-ticket-suggestion", async (
-        HttpContext httpContext,
-        ProposeTicketSuggestion request,
-        ProposeTicketSuggestionApplier applier) =>
-    {
-        if (!DevBridgeEndpointPolicy.IsLocalCaller(httpContext))
-            return DevBridgeEndpointPolicy.RejectDisabled();
-
-        var outcome = await applier.ApplyAsync(request);
-        return Results.Ok(new { accepted = outcome.Accepted, rejectReason = outcome.RejectReason });
-    }).AllowAnonymous();
-}
 
 // /debug/outbox query bang OutboxMessage cua MassTransit thay vi bang custom cu.
 app.MapGet("/debug/outbox", async (TicketDbContext db) =>
@@ -159,11 +137,7 @@ app.MapPost("/tickets", async (
     CreateTicketRequest request,
     HttpContext httpContext,
     TicketDbContext db,
-    IPublishEndpoint publish,
-    OrchestratorDevBridge bridge,
-    Microsoft.Extensions.Options.IOptions<LocalMessagingOptions> localOpts,
-    Microsoft.Extensions.Options.IOptions<ServiceBusOptions> sbOpts,
-    ILogger<Program> logger) =>
+    IPublishEndpoint publish) =>
 {
     if (string.IsNullOrWhiteSpace(request.EmployeeId) || string.IsNullOrWhiteSpace(request.Question))
         return Results.BadRequest(new { error = "employeeId va question la bat buoc." });
@@ -220,19 +194,7 @@ app.MapPost("/tickets", async (
         entity.Category,
         entity.Version);
 
-    var useHttpBridge = DevBridgeEndpointPolicy.ShouldUseHttpBridge(
-        httpContext.RequestServices.GetRequiredService<IHostEnvironment>(),
-        localOpts.Value,
-        sbOpts.Value);
-    if (useHttpBridge)
-    {
-        logger.LogWarning(
-            "POST /tickets dang dung HTTP dev bridge (best-effort) — khong ghi TicketCreated vao Outbox. Dat ServiceBus emulator connection string cho reliable path.");
-    }
-    else
-    {
-        await publish.Publish<ITicketCreated>(created);
-    }
+    await publish.Publish<ITicketCreated>(created);
 
     var dto = TicketMapper.ToDto(entity);
     if (!string.IsNullOrWhiteSpace(idempotencyKey))
@@ -249,18 +211,6 @@ app.MapPost("/tickets", async (
     }
 
     await db.SaveChangesAsync();
-
-    var bridgeFailed = false;
-    if (useHttpBridge)
-        bridgeFailed = !await bridge.TryNotifyTicketCreatedAsync(created, httpContext.RequestAborted);
-
-    if (bridgeFailed)
-    {
-        logger.LogError(
-            "Ticket {TicketId} da luu nhung auto-suggestion bridge that bai — job co the khong ton tai. Kiem tra AiOrchestrator /debug/auto-suggestion-jobs.",
-            entity.Id);
-        dto = TicketMapper.ToDto(entity, autoSuggestionNotifyFailed: true);
-    }
 
     return Results.Created($"/tickets/{entity.Id}", dto);
 }).WithEntraPolicy(entraEnabled, PolicyNames.UserOrService);

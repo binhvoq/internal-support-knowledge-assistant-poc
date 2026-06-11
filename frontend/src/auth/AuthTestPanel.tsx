@@ -109,11 +109,10 @@ export function AuthTestPanel() {
       <div className="card auth-panel">
         <h2>Đăng nhập Entra ID</h2>
         <p>
-          Thiếu biến môi trường MSAL. Chạy từ root repo:
+          Thiếu biến môi trường MSAL. Cấu hình Entra trực tiếp rồi chạy frontend:
         </p>
         <pre className="auth-pre">
-          bash scripts/provision-entra.sh{'\n'}
-          bash scripts/sync-config.sh{'\n'}
+          {'# Copy Terraform/Entra values into frontend/.env.local\n'}
           cd frontend && npm run dev
         </pre>
       </div>

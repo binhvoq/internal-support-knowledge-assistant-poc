@@ -15,6 +15,6 @@ public sealed class TicketDto
     public long Version { get; init; } = 1;
     public bool HasAiSuggestion => !string.IsNullOrWhiteSpace(AiSuggestedAnswer);
 
-    /// <summary>Chi POST /tickets: true khi ticket da luu nhung dev bridge notify that bai.</summary>
+    /// <summary>Deprecated — luon false; giu cho tuong thich API.</summary>
     public bool AutoSuggestionNotifyFailed { get; init; }
 }

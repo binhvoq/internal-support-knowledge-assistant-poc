@@ -14,7 +14,7 @@ export type Ticket = {
   createdAt: string;
   updatedAt: string;
   hasAiSuggestion: boolean;
-  /** Chi POST /tickets — true khi ticket da luu nhung dev bridge notify that bai */
+  /** Deprecated — luon false; giu cho tuong thich API */
   autoSuggestionNotifyFailed?: boolean;
 };
 
