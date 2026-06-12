@@ -7,4 +7,5 @@ public sealed class AutoSuggestionOptions
     public int StepTimeoutSeconds { get; set; } = 120;
     public int ProposeRequestTimeoutSeconds { get; set; } = 30;
     public int MaxGenerationRetries { get; set; } = 2;
+    public int MaxProposeRetries { get; set; } = 2;
 }

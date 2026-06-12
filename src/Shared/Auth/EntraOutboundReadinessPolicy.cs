@@ -3,7 +3,7 @@ using SupportPoc.Shared.Options;
 
 namespace SupportPoc.Shared.Auth;
 
-/// <summary>Kiem tra cau hinh/token outbound Entra cho service-to-service (vd. saga reconcile snapshot).</summary>
+/// <summary>Kiem tra cau hinh/token outbound Entra cho HTTP client noi bo (MCP, Knowledge, debug).</summary>
 public static class EntraOutboundReadinessPolicy
 {
     public sealed record Result(bool Ready, string Detail);
@@ -16,11 +16,11 @@ public static class EntraOutboundReadinessPolicy
         var clientId = options.McpClientId ?? options.ClientId;
         var secret = options.McpClientSecret ?? options.ClientSecret;
         if (string.IsNullOrWhiteSpace(options.TenantId))
-            return new Result(false, "Thieu AzureAd.TenantId — saga reconcile snapshot se bi 401.");
+            return new Result(false, "Thieu AzureAd.TenantId — HTTP outbound se bi 401.");
         if (string.IsNullOrWhiteSpace(clientId))
-            return new Result(false, "Thieu AzureAd.McpClientId — saga reconcile snapshot se bi 401.");
+            return new Result(false, "Thieu AzureAd.McpClientId — HTTP outbound se bi 401.");
         if (string.IsNullOrWhiteSpace(secret))
-            return new Result(false, "Thieu AzureAd.McpClientSecret — saga reconcile snapshot se bi 401.");
+            return new Result(false, "Thieu AzureAd.McpClientSecret — HTTP outbound se bi 401.");
 
         var audience = string.IsNullOrWhiteSpace(options.Audience) ? options.ClientId : options.Audience;
         if (string.IsNullOrWhiteSpace(audience))
@@ -46,7 +46,7 @@ public static class EntraOutboundReadinessPolicy
         {
             var token = await provider.GetTokenAsync(cancellationToken);
             if (string.IsNullOrWhiteSpace(token))
-                return new Result(false, "Client credentials tra ve token rong — saga reconcile snapshot se bi 401.");
+                return new Result(false, "Client credentials tra ve token rong — HTTP outbound se bi 401.");
 
             return new Result(true, "Entra outbound token acquired.");
         }

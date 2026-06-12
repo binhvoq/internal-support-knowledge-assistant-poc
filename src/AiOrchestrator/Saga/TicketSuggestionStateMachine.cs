@@ -81,47 +81,15 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                     .Then(TicketSuggestionActivities.AuditLateAttempt)),
 
             When(SuggestionGenerationFailed)
-                .If(ctx => ctx.Message.AttemptId == ctx.Saga.CurrentAttemptId, then => then
-                    .Unschedule(StepTimeoutSchedule)
-                    .TransitionTo(Reconciling)
-                    .ThenAsync(TicketSuggestionActivities.ReconcileAsync)
-                    .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Complete, complete => complete
-                        .Publish(ctx => new AiSuggestionGenerated(ctx.Saga.JobId, ctx.Saga.TicketId))
-                        .TransitionTo(Completed)
-                        )
-                    .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Discard, discard => discard
-                        .Publish(ctx => new AutoSuggestionDiscarded(ctx.Saga.JobId, ctx.Saga.TicketId, ctx.Saga.DiscardReason ?? "Discarded"))
-                        .TransitionTo(Discarded)
-                        )
-                    .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Retry, retry => retry
-                        .Send(GenerateSuggestionEndpoint, ctx => TicketSuggestionActivities.CreateGenerateRequest(ctx))
-                        .Schedule(StepTimeoutSchedule, ctx => TicketSuggestionActivities.CreateStepTimeout(ctx))
-                        .TransitionTo(GeneratingSuggestion))
-                    .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Fail, fail => fail
-                        .Publish(ctx => new AutoSuggestionFailed(ctx.Saga.JobId, ctx.Saga.TicketId, ctx.Saga.FailureReason ?? "Failed"))
-                        .TransitionTo(Failed)
-                        )),
+                .If(ctx => ctx.Message.AttemptId == ctx.Saga.CurrentAttemptId, then => AfterReconcile(
+                    then.Unschedule(StepTimeoutSchedule)
+                        .TransitionTo(Reconciling)
+                        .Then(TicketSuggestionActivities.Reconcile))),
 
             When(StepTimeoutSchedule.Received)
-                .If(ctx => ctx.Message.AttemptId == ctx.Saga.CurrentAttemptId, then => then
-                    .TransitionTo(Reconciling)
-                    .ThenAsync(TicketSuggestionActivities.ReconcileAsync)
-                    .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Complete, complete => complete
-                        .Publish(ctx => new AiSuggestionGenerated(ctx.Saga.JobId, ctx.Saga.TicketId))
-                        .TransitionTo(Completed)
-                        )
-                    .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Discard, discard => discard
-                        .Publish(ctx => new AutoSuggestionDiscarded(ctx.Saga.JobId, ctx.Saga.TicketId, ctx.Saga.DiscardReason ?? "Discarded"))
-                        .TransitionTo(Discarded)
-                        )
-                    .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Retry, retry => retry
-                        .Send(GenerateSuggestionEndpoint, ctx => TicketSuggestionActivities.CreateGenerateRequest(ctx))
-                        .Schedule(StepTimeoutSchedule, ctx => TicketSuggestionActivities.CreateStepTimeout(ctx))
-                        .TransitionTo(GeneratingSuggestion))
-                    .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Fail, fail => fail
-                        .Publish(ctx => new AutoSuggestionFailed(ctx.Saga.JobId, ctx.Saga.TicketId, ctx.Saga.FailureReason ?? "Failed"))
-                        .TransitionTo(Failed)
-                        )));
+                .If(ctx => ctx.Message.AttemptId == ctx.Saga.CurrentAttemptId, then => AfterReconcile(
+                    then.TransitionTo(Reconciling)
+                        .Then(TicketSuggestionActivities.Reconcile))));
 
         During(ApplyingSuggestion,
             Ignore(TicketCreated),
@@ -143,66 +111,20 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
 
             When(ProposeSuggestion.Faulted)
                 .Unschedule(StepTimeoutSchedule)
-                .TransitionTo(Reconciling)
-                .ThenAsync(TicketSuggestionActivities.ReconcileAsync)
-                .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Complete, complete => complete
-                    .Publish(ctx => new AiSuggestionGenerated(ctx.Saga.JobId, ctx.Saga.TicketId))
-                    .TransitionTo(Completed)
-                    )
-                .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Discard, discard => discard
-                    .Publish(ctx => new AutoSuggestionDiscarded(ctx.Saga.JobId, ctx.Saga.TicketId, ctx.Saga.DiscardReason ?? "Discarded"))
-                    .TransitionTo(Discarded)
-                    )
-                .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Retry, retry => retry
-                    .Send(GenerateSuggestionEndpoint, ctx => TicketSuggestionActivities.CreateGenerateRequest(ctx))
-                    .Schedule(StepTimeoutSchedule, ctx => TicketSuggestionActivities.CreateStepTimeout(ctx))
-                    .TransitionTo(GeneratingSuggestion))
-                .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Fail, fail => fail
-                    .Publish(ctx => new AutoSuggestionFailed(ctx.Saga.JobId, ctx.Saga.TicketId, ctx.Saga.FailureReason ?? "Failed"))
-                    .TransitionTo(Failed)
-                    ),
+                .If(_ => true, then => AfterReconcile(
+                    then.TransitionTo(Reconciling)
+                        .Then(TicketSuggestionActivities.Reconcile))),
 
             When(ProposeSuggestion.TimeoutExpired)
                 .Unschedule(StepTimeoutSchedule)
-                .TransitionTo(Reconciling)
-                .ThenAsync(TicketSuggestionActivities.ReconcileAsync)
-                .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Complete, complete => complete
-                    .Publish(ctx => new AiSuggestionGenerated(ctx.Saga.JobId, ctx.Saga.TicketId))
-                    .TransitionTo(Completed)
-                    )
-                .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Discard, discard => discard
-                    .Publish(ctx => new AutoSuggestionDiscarded(ctx.Saga.JobId, ctx.Saga.TicketId, ctx.Saga.DiscardReason ?? "Discarded"))
-                    .TransitionTo(Discarded)
-                    )
-                .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Retry, retry => retry
-                    .Send(GenerateSuggestionEndpoint, ctx => TicketSuggestionActivities.CreateGenerateRequest(ctx))
-                    .Schedule(StepTimeoutSchedule, ctx => TicketSuggestionActivities.CreateStepTimeout(ctx))
-                    .TransitionTo(GeneratingSuggestion))
-                .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Fail, fail => fail
-                    .Publish(ctx => new AutoSuggestionFailed(ctx.Saga.JobId, ctx.Saga.TicketId, ctx.Saga.FailureReason ?? "Failed"))
-                    .TransitionTo(Failed)
-                    ),
+                .If(_ => true, then => AfterReconcile(
+                    then.TransitionTo(Reconciling)
+                        .Then(TicketSuggestionActivities.Reconcile))),
 
             When(StepTimeoutSchedule.Received)
-                .If(ctx => ctx.Message.AttemptId == ctx.Saga.CurrentAttemptId, then => then
-                    .TransitionTo(Reconciling)
-                    .ThenAsync(TicketSuggestionActivities.ReconcileAsync)
-                    .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Complete, complete => complete
-                        .Publish(ctx => new AiSuggestionGenerated(ctx.Saga.JobId, ctx.Saga.TicketId))
-                        .TransitionTo(Completed)
-                        )
-                    .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Discard, discard => discard
-                        .Publish(ctx => new AutoSuggestionDiscarded(ctx.Saga.JobId, ctx.Saga.TicketId, ctx.Saga.DiscardReason ?? "Discarded"))
-                        .TransitionTo(Discarded)
-                        )
-                    .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Retry, retry => retry
-                        .Send(GenerateSuggestionEndpoint, ctx => TicketSuggestionActivities.CreateGenerateRequest(ctx))
-                        .Schedule(StepTimeoutSchedule, ctx => TicketSuggestionActivities.CreateStepTimeout(ctx))
-                        .TransitionTo(GeneratingSuggestion))
-                    .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Fail, fail => fail
-                        .Publish(ctx => new AutoSuggestionFailed(ctx.Saga.JobId, ctx.Saga.TicketId, ctx.Saga.FailureReason ?? "Failed"))
-                        .TransitionTo(Failed)
-                        )),
+                .If(ctx => ctx.Message.AttemptId == ctx.Saga.CurrentAttemptId, then => AfterReconcile(
+                    then.TransitionTo(Reconciling)
+                        .Then(TicketSuggestionActivities.Reconcile))),
 
             Ignore(SuggestionGenerated));
 
@@ -236,6 +158,22 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
             When(SuggestionGenerated)
                 .Then(TicketSuggestionActivities.AuditLateMessageIgnored));
     }
+
+    private EventActivityBinder<TicketSuggestionSaga, T> AfterReconcile<T>(
+        EventActivityBinder<TicketSuggestionSaga, T> binder)
+        where T : class =>
+        binder
+            .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Propose, propose => propose
+                .Request(ProposeSuggestion, ctx => TicketSuggestionActivities.CreateProposeRequest(ctx))
+                .Schedule(StepTimeoutSchedule, ctx => TicketSuggestionActivities.CreateStepTimeout(ctx))
+                .TransitionTo(ApplyingSuggestion))
+            .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Retry, retry => retry
+                .Send(GenerateSuggestionEndpoint, ctx => TicketSuggestionActivities.CreateGenerateRequest(ctx))
+                .Schedule(StepTimeoutSchedule, ctx => TicketSuggestionActivities.CreateStepTimeout(ctx))
+                .TransitionTo(GeneratingSuggestion))
+            .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Fail, fail => fail
+                .Publish(ctx => new AutoSuggestionFailed(ctx.Saga.JobId, ctx.Saga.TicketId, ctx.Saga.FailureReason ?? "Failed"))
+                .TransitionTo(Failed));
 }
 
 public sealed class TicketSuggestionStateMachineDefinition : SagaDefinition<TicketSuggestionSaga>

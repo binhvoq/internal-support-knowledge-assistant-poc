@@ -118,7 +118,7 @@ if (entraEnabled)
     if (!outboundConfig.Ready)
     {
         app.Logger.LogWarning(
-            "Entra outbound chua san sang — saga reconcile snapshot co the bi 401: {Detail}",
+            "Entra outbound chua san sang — HTTP outbound (MCP/Knowledge/debug) co the bi 401: {Detail}",
             outboundConfig.Detail);
     }
 }
@@ -126,6 +126,7 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<OrchestratorDbContext>();
     await DatabaseProvider.EnsureDatabaseReadyAsync(db);
+    await OrchestratorSchemaPatcher.ApplyAsync(db);
 }
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "ai-orchestrator" }))
     .AllowAnonymous();
@@ -154,7 +155,7 @@ app.MapGet("/ready", async (
                 transport = pipeline.Transport,
                 detail = pipeline.Detail,
                 entraOutbound = new { ready = false, entraOutbound.Detail },
-                note = "Saga reconcile snapshot can Bearer token cho TicketService."
+                note = "Entra outbound can Bearer token cho HTTP client noi bo."
             },
             statusCode: StatusCodes.Status503ServiceUnavailable);
 

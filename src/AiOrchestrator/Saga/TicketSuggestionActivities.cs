@@ -1,8 +1,8 @@
 using System.Text.Json;
 using MassTransit;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using SupportPoc.AiOrchestrator.Options;
-using SupportPoc.AiOrchestrator.Services;
 using SupportPoc.Shared.Contracts;
 using SupportPoc.Shared.Models;
 
@@ -10,10 +10,38 @@ namespace SupportPoc.AiOrchestrator.Saga;
 
 internal static class ReconcileActions
 {
-    public const string Complete = "complete";
-    public const string Discard = "discard";
+    public const string Propose = "propose";
     public const string Retry = "retry";
     public const string Fail = "fail";
+}
+
+internal static class ReconcilePlanner
+{
+    internal sealed record Outcome(
+        string Action,
+        string? FailureReason = null,
+        bool StartNewGenerationAttempt = false,
+        bool IncrementProposeRetry = false);
+
+    internal static Outcome Decide(TicketSuggestionSaga saga, AutoSuggestionOptions options)
+    {
+        if (!string.IsNullOrWhiteSpace(saga.GeneratedSuggestion))
+        {
+            if (saga.ProposeRetryCount >= options.MaxProposeRetries)
+            {
+                return new Outcome(ReconcileActions.Fail, "Applying suggestion timed out after retries.");
+            }
+
+            return new Outcome(ReconcileActions.Propose, IncrementProposeRetry: true);
+        }
+
+        if (saga.RetryCount < options.MaxGenerationRetries)
+        {
+            return new Outcome(ReconcileActions.Retry, StartNewGenerationAttempt: true);
+        }
+
+        return new Outcome(ReconcileActions.Fail, "Generation timed out after retries.");
+    }
 }
 
 internal static class TicketSuggestionActivities
@@ -43,6 +71,7 @@ internal static class TicketSuggestionActivities
         context.Saga.GeneratedSuggestion = null;
         context.Saga.GeneratedRelatedDocumentsJson = "[]";
         context.Saga.PendingReconcileAction = null;
+        context.Saga.ProposeRetryCount = 0;
         context.Saga.UpdatedAt = DateTimeOffset.UtcNow;
     }
 
@@ -128,73 +157,35 @@ internal static class TicketSuggestionActivities
             .LogInformation("{Audit}", audit);
     }
 
-    internal static async Task ReconcileAsync(BehaviorContext<TicketSuggestionSaga> context)
+    internal static void Reconcile(BehaviorContext<TicketSuggestionSaga> context)
     {
         var logger = context.GetServiceOrCreateInstance<ILogger<TicketSuggestionStateMachine>>();
-        var snapshotClient = context.GetServiceOrCreateInstance<ITicketSnapshotClient>();
-        var options = context.GetServiceOrCreateInstance<Microsoft.Extensions.Options.IOptions<AutoSuggestionOptions>>().Value;
+        var options = context.GetServiceOrCreateInstance<IOptions<AutoSuggestionOptions>>().Value;
 
         context.Saga.PendingReconcileAction = null;
-        var snapshot = await snapshotClient.GetTicketAsync(context.Saga.TicketId, context.CancellationToken);
-        if (snapshot is not null)
-        {
-            if (snapshot.Status == TicketStatus.Suggested && snapshot.HasAiSuggestion)
-            {
-                logger.LogInformation(
-                    "Reconcile: ticket already suggested SagaId={SagaId} TicketId={TicketId}",
-                    context.Saga.CorrelationId,
-                    context.Saga.TicketId);
-                context.Saga.PendingReconcileAction = ReconcileActions.Complete;
-                context.Saga.UpdatedAt = DateTimeOffset.UtcNow;
-                return;
-            }
+        var outcome = ReconcilePlanner.Decide(context.Saga, options);
 
-            if (snapshot.Status is TicketStatus.Resolved or TicketStatus.Reopened)
-            {
-                context.Saga.DiscardReason = $"Ticket status is {snapshot.Status}.";
-                context.Saga.PendingReconcileAction = ReconcileActions.Discard;
-                context.Saga.UpdatedAt = DateTimeOffset.UtcNow;
-                return;
-            }
-        }
-
-        if (!string.IsNullOrWhiteSpace(context.Saga.GeneratedSuggestion))
+        if (outcome.IncrementProposeRetry)
         {
+            context.Saga.ProposeRetryCount++;
             logger.LogInformation(
-                "Reconcile: generated result present, retry propose SagaId={SagaId}",
-                context.Saga.CorrelationId);
-            var propose = CreateProposeRequest(context);
-            var bus = context.GetServiceOrCreateInstance<IBus>();
-            var client = bus.CreateRequestClient<IProposeTicketSuggestion>(
-                new Uri("queue:propose-ticket-suggestion"),
-                TimeSpan.FromSeconds(Math.Max(5, options.ProposeRequestTimeoutSeconds)));
-            var response = await client.GetResponse<IProposeTicketSuggestionResult>(
-                propose,
-                context.CancellationToken);
-
-            if (response.Message.Accepted)
-            {
-                context.Saga.PendingReconcileAction = ReconcileActions.Complete;
-                context.Saga.UpdatedAt = DateTimeOffset.UtcNow;
-                return;
-            }
-
-            context.Saga.DiscardReason = response.Message.Reason;
-            context.Saga.PendingReconcileAction = ReconcileActions.Discard;
-            context.Saga.UpdatedAt = DateTimeOffset.UtcNow;
-            return;
+                "Reconcile: retry propose via state machine SagaId={SagaId} ProposeRetryCount={ProposeRetryCount}",
+                context.Saga.CorrelationId,
+                context.Saga.ProposeRetryCount);
         }
 
-        if (context.Saga.RetryCount < options.MaxGenerationRetries)
+        if (outcome.StartNewGenerationAttempt)
         {
             context.Saga.RetryCount++;
             StartNewAttempt(context);
-            context.Saga.PendingReconcileAction = ReconcileActions.Retry;
-            return;
         }
 
-        context.Saga.FailureReason = "Generation timed out after retries.";
-        context.Saga.PendingReconcileAction = ReconcileActions.Fail;
+        if (outcome.FailureReason is not null)
+        {
+            context.Saga.FailureReason = outcome.FailureReason;
+        }
+
+        context.Saga.PendingReconcileAction = outcome.Action;
         context.Saga.UpdatedAt = DateTimeOffset.UtcNow;
     }
 }
