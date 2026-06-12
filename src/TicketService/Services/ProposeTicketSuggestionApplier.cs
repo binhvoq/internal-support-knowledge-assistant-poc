@@ -18,72 +18,83 @@ public sealed class ProposeTicketSuggestionApplier(TicketDbContext db, ILogger<P
         var docsJson = JsonSerializer.Serialize(msg.RelatedDocuments, JsonOptions);
         var now = DateTimeOffset.UtcNow;
 
-        await using var tx = await db.Database.BeginTransactionAsync(cancellationToken);
+        var ownsTransaction = db.Database.CurrentTransaction is null;
+        IDbContextTransaction? ownedTransaction = ownsTransaction
+            ? await db.Database.BeginTransactionAsync(cancellationToken)
+            : null;
 
-        var existing = await db.ProcessedCommands.FindAsync([msg.CommandId], cancellationToken);
-        if (existing is not null)
+        try
         {
+            var existing = await db.ProcessedCommands.FindAsync([msg.CommandId], cancellationToken);
+            if (existing is not null)
+            {
+                logger.LogInformation(
+                    "Propose idempotent replay CommandId={CommandId} TicketId={TicketId} Accepted={Accepted}",
+                    msg.CommandId,
+                    msg.TicketId,
+                    existing.Accepted);
+                return new Outcome(existing.Accepted, existing.RejectReason);
+            }
+
+            var candidates = db.Tickets.Where(t =>
+                t.Id == msg.TicketId &&
+                t.Status == TicketStatus.New &&
+                t.AiSuggestedAnswer == null &&
+                t.FinalAnswer == null);
+
+            if (msg.ExpectedTicketVersion is not null)
+                candidates = candidates.Where(t => t.Version == msg.ExpectedTicketVersion.Value);
+
+            var affected = await candidates.ExecuteUpdateAsync(setters => setters
+                .SetProperty(t => t.Status, TicketStatus.Suggested)
+                .SetProperty(t => t.Category, msg.Category)
+                .SetProperty(t => t.AiSuggestedAnswer, msg.Suggestion)
+                .SetProperty(t => t.RelatedDocumentsJson, docsJson)
+                .SetProperty(t => t.Version, t => t.Version + 1)
+                .SetProperty(t => t.UpdatedAt, now),
+                cancellationToken);
+
+            if (affected == 1)
+            {
+                logger.LogInformation("Propose accepted TicketId={TicketId} JobId={JobId}", msg.TicketId, msg.JobId);
+                return await CommitOutcomeAsync(msg, true, null, ownedTransaction, cancellationToken);
+            }
+
+            var ticket = await db.Tickets.AsNoTracking()
+                .FirstOrDefaultAsync(t => t.Id == msg.TicketId, cancellationToken);
+
+            if (ticket is null)
+            {
+                logger.LogWarning("Propose: ticket not found TicketId={TicketId}", msg.TicketId);
+                return await CommitOutcomeAsync(msg, false, "Ticket not found", ownedTransaction, cancellationToken);
+            }
+
+            var rejectReason = AutoSuggestionRules.GetRejectReason(ticket, msg.ExpectedTicketVersion);
+            if (rejectReason is not null
+                && IsAlreadyAcceptedBySameJob(rejectReason)
+                && await WasAcceptedBySameJobAsync(msg.TicketId, msg.JobId, cancellationToken))
+            {
+                logger.LogInformation(
+                    "Propose idempotent accept same job TicketId={TicketId} JobId={JobId}",
+                    msg.TicketId,
+                    msg.JobId);
+                return await CommitOutcomeAsync(msg, true, null, ownedTransaction, cancellationToken);
+            }
+
+            rejectReason ??= "Ticket changed while applying suggestion.";
+
             logger.LogInformation(
-                "Propose idempotent replay CommandId={CommandId} TicketId={TicketId} Accepted={Accepted}",
-                msg.CommandId,
+                "Propose rejected TicketId={TicketId} JobId={JobId} Reason={Reason}",
                 msg.TicketId,
-                existing.Accepted);
-            return new Outcome(existing.Accepted, existing.RejectReason);
+                msg.JobId,
+                rejectReason);
+            return await CommitOutcomeAsync(msg, false, rejectReason, ownedTransaction, cancellationToken);
         }
-
-        var candidates = db.Tickets.Where(t =>
-            t.Id == msg.TicketId &&
-            t.Status == TicketStatus.New &&
-            t.AiSuggestedAnswer == null &&
-            t.FinalAnswer == null);
-
-        if (msg.ExpectedTicketVersion is not null)
-            candidates = candidates.Where(t => t.Version == msg.ExpectedTicketVersion.Value);
-
-        var affected = await candidates.ExecuteUpdateAsync(setters => setters
-            .SetProperty(t => t.Status, TicketStatus.Suggested)
-            .SetProperty(t => t.Category, msg.Category)
-            .SetProperty(t => t.AiSuggestedAnswer, msg.Suggestion)
-            .SetProperty(t => t.RelatedDocumentsJson, docsJson)
-            .SetProperty(t => t.Version, t => t.Version + 1)
-            .SetProperty(t => t.UpdatedAt, now),
-            cancellationToken);
-
-        if (affected == 1)
+        finally
         {
-            logger.LogInformation("Propose accepted TicketId={TicketId} JobId={JobId}", msg.TicketId, msg.JobId);
-            return await CommitOutcomeAsync(msg, true, null, tx, cancellationToken);
+            if (ownedTransaction is not null)
+                await ownedTransaction.DisposeAsync();
         }
-
-        var ticket = await db.Tickets.AsNoTracking()
-            .FirstOrDefaultAsync(t => t.Id == msg.TicketId, cancellationToken);
-
-        if (ticket is null)
-        {
-            logger.LogWarning("Propose: ticket not found TicketId={TicketId}", msg.TicketId);
-            return await CommitOutcomeAsync(msg, false, "Ticket not found", tx, cancellationToken);
-        }
-
-        var rejectReason = AutoSuggestionRules.GetRejectReason(ticket, msg.ExpectedTicketVersion);
-        if (rejectReason is not null
-            && IsAlreadyAcceptedBySameJob(rejectReason)
-            && await WasAcceptedBySameJobAsync(msg.TicketId, msg.JobId, cancellationToken))
-        {
-            logger.LogInformation(
-                "Propose idempotent accept same job TicketId={TicketId} JobId={JobId}",
-                msg.TicketId,
-                msg.JobId);
-            return await CommitOutcomeAsync(msg, true, null, tx, cancellationToken);
-        }
-
-        rejectReason ??= "Ticket changed while applying suggestion.";
-
-        logger.LogInformation(
-            "Propose rejected TicketId={TicketId} JobId={JobId} Reason={Reason}",
-            msg.TicketId,
-            msg.JobId,
-            rejectReason);
-        return await CommitOutcomeAsync(msg, false, rejectReason, tx, cancellationToken);
     }
 
     private static bool IsAlreadyAcceptedBySameJob(string rejectReason) =>
@@ -111,12 +122,13 @@ public sealed class ProposeTicketSuggestionApplier(TicketDbContext db, ILogger<P
         IProposeTicketSuggestion msg,
         bool accepted,
         string? rejectReason,
-        IDbContextTransaction tx,
+        IDbContextTransaction? ownedTransaction,
         CancellationToken cancellationToken)
     {
         StageOutcome(msg, accepted, rejectReason);
         await db.SaveChangesAsync(cancellationToken);
-        await tx.CommitAsync(cancellationToken);
+        if (ownedTransaction is not null)
+            await ownedTransaction.CommitAsync(cancellationToken);
         return new Outcome(accepted, rejectReason);
     }
 }

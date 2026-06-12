@@ -1,5 +1,4 @@
 using MassTransit;
-using MassTransit.EntityFrameworkCoreIntegration;
 using Microsoft.Extensions.Options;
 using SupportPoc.AiOrchestrator.Data;
 using SupportPoc.AiOrchestrator.Options;
@@ -255,6 +254,6 @@ public sealed class TicketSuggestionStateMachineDefinition : SagaDefinition<Tick
 
         endpointConfigurator.UseMessageRetry(r => r.Intervals(500, 2000, 5000));
         endpointConfigurator.ConcurrentMessageLimit = 1;
-        endpointConfigurator.UseEntityFrameworkOutbox<OrchestratorDbContext>(context);
+        // Consumer outbox: Program.cs AddEntityFrameworkConsumerOutbox<OrchestratorDbContext>()
     }
 }

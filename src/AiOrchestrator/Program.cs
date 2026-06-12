@@ -72,6 +72,7 @@ builder.Services.AddScoped<ITicketSuggestionReconcileClient, HttpTicketSuggestio
 builder.Services.AddScoped<ReconcileTicketSuggestionActivity>();
 builder.Services.AddHostedService<StuckSagaSweeperService>();
 var serviceBus = builder.Configuration.GetSection(ServiceBusOptions.SectionName).Get<ServiceBusOptions>() ?? new ServiceBusOptions();
+var duplicateDetectionWindow = TimeSpan.FromHours(1);
 builder.Services.AddMassTransit(mt =>
 {
     mt.AddDelayedMessageScheduler();
@@ -87,12 +88,14 @@ builder.Services.AddMassTransit(mt =>
                 DatabaseProvider.ConfigureDbContext(cfg, conn);
             });
         });
+    // Bus outbox + consumer outbox/InboxState (MessageId dedup). AiGenerationAttempts = idempotency theo AttemptId.
     mt.AddEntityFrameworkOutbox<OrchestratorDbContext>(o =>
     {
         o.UseSqlServer();
         o.UseBusOutbox();
-        o.DuplicateDetectionWindow = TimeSpan.FromHours(1);
+        o.DuplicateDetectionWindow = duplicateDetectionWindow;
     });
+    mt.AddEntityFrameworkConsumerOutbox<OrchestratorDbContext>();
     if (serviceBus.Enabled)
     {
         mt.AddSupportPocAzureServiceBusHost(serviceBus, (ctx, cfg) =>
@@ -181,11 +184,13 @@ app.MapGet("/ready", async (
         },
         messaging = new
         {
-            sagaConsumerOutbox = true,
-            aiWorkerConsumerOutbox = true,
-            note = "Saga MassTransit Inbox enabled (SQL Server)."
+            busOutbox = true,
+            consumerOutbox = true,
+            duplicateDetectionWindow = duplicateDetectionWindow.ToString(),
+            note = MessagingOutboxDiagnostics.ConsumerOutboxNote,
+            businessIdempotency = "AiGenerationAttempts (AttemptId)"
         },
-        note = "Kiem tra transport/DNS va Entra outbound (neu bat). Dung smoke-test cho end-to-end."
+        note = "Kiem tra transport/DNS va Entra outbound (neu bat). Khong chung minh consumer delivery end-to-end."
     });
 }).AllowAnonymous();
 static string MapSagaStatusForUi(string? currentState) => currentState switch
@@ -327,6 +332,11 @@ app.MapGet("/debug/dlq", async (string? queue, IOptions<ServiceBusOptions> sbOpt
         return Results.Ok(new { error = ex.Message, queue = queueName });
     }
 }).WithDebugOrServicePolicy(entraEnabled, app.Environment);
+app.MapGet("/debug/messaging", async (OrchestratorDbContext db, CancellationToken cancellationToken) =>
+    Results.Ok(await MessagingOutboxDiagnostics.BuildSnapshotAsync(
+        db, duplicateDetectionWindow, cancellationToken: cancellationToken)))
+    .WithDebugOrServicePolicy(entraEnabled, app.Environment);
+
 app.MapGet("/debug/inbox", async (OrchestratorDbContext db) =>
 {
     var items = await db.Set<InboxState>()

@@ -31,19 +31,22 @@ builder.Services.AddCors(options =>
 
 // ---------- MassTransit ----------
 var serviceBus = builder.Configuration.GetSection(ServiceBusOptions.SectionName).Get<ServiceBusOptions>() ?? new ServiceBusOptions();
+var duplicateDetectionWindow = TimeSpan.FromHours(1);
 
 builder.Services.AddMassTransit(mt =>
 {
     mt.AddConsumer<ProposeTicketSuggestionConsumer, ProposeTicketSuggestionConsumerDefinition>();
 
-    // Transactional Outbox: HTTP POST /tickets se Publish ITicketCreated qua outbox
-    // -> ghi cung transaction voi TicketEntity -> khong con dual-write.
+    // Bus outbox: HTTP POST /tickets publish ITicketCreated atomically voi TicketEntity.
+    // Consumer outbox + InboxState: duplicate transport delivery theo MessageId (MassTransit 8.x).
+    // Idempotency nghiep vu: ProcessedCommands theo CommandId — tach biet voi transport dedup.
     mt.AddEntityFrameworkOutbox<TicketDbContext>(o =>
     {
         o.UseSqlServer();
         o.UseBusOutbox();
-        o.DuplicateDetectionWindow = TimeSpan.FromHours(1);
+        o.DuplicateDetectionWindow = duplicateDetectionWindow;
     });
+    mt.AddEntityFrameworkConsumerOutbox<TicketDbContext>();
 
     if (serviceBus.Enabled)
     {
@@ -71,7 +74,7 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<TicketDbContext>();
     await DatabaseProvider.EnsureDatabaseReadyAsync(db);
-    // IdempotencyRecords + Ticket + MassTransit Outbox/Inbox tables tu sinh.
+    // IdempotencyRecords + Ticket + MassTransit OutboxState/OutboxMessage/InboxState tables tu sinh.
 }
 
 var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
@@ -94,11 +97,24 @@ app.MapGet("/ready", async (
         ready = true,
         transport = pipeline.Transport,
         detail = pipeline.Detail,
-        note = "Chi kiem tra transport/DNS — khong chung minh consumer dang chay. Dung smoke-test cho end-to-end."
+        messaging = new
+        {
+            busOutbox = true,
+            consumerOutbox = true,
+            duplicateDetectionWindow = duplicateDetectionWindow.ToString(),
+            note = MessagingOutboxDiagnostics.ConsumerOutboxNote,
+            businessIdempotency = "ProcessedCommands (CommandId)"
+        },
+        note = "Chi kiem tra transport/DNS — khong chung minh consumer delivery end-to-end. Dung smoke-test."
     });
 }).AllowAnonymous();
 
-// /debug/outbox query bang OutboxMessage cua MassTransit thay vi bang custom cu.
+app.MapGet("/debug/messaging", async (TicketDbContext db, CancellationToken cancellationToken) =>
+    Results.Ok(await MessagingOutboxDiagnostics.BuildSnapshotAsync(
+        db, duplicateDetectionWindow, cancellationToken: cancellationToken)))
+    .WithDebugOrServicePolicy(entraEnabled, app.Environment);
+
+// /debug/outbox — recent OutboxMessage rows (xem /debug/messaging cho pending summary).
 app.MapGet("/debug/outbox", async (TicketDbContext db) =>
 {
     var items = await db.Set<OutboxMessage>()

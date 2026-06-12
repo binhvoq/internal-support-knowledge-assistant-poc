@@ -1,6 +1,5 @@
 using System.Text.Json;
 using MassTransit;
-using MassTransit.EntityFrameworkCoreIntegration;
 using Microsoft.EntityFrameworkCore;
 using SupportPoc.AiOrchestrator.Data;
 using SupportPoc.AiOrchestrator.Services;
@@ -230,7 +229,7 @@ public sealed class GenerateSuggestionRequestedConsumerDefinition
         IRegistrationContext context)
     {
         endpointConfigurator.UseMessageRetry(r => r.Intervals(500, 2000, 5000, 10000));
-        endpointConfigurator.UseEntityFrameworkOutbox<OrchestratorDbContext>(context);
+        // Consumer outbox: Program.cs AddEntityFrameworkConsumerOutbox<OrchestratorDbContext>()
 
         if (endpointConfigurator is IServiceBusReceiveEndpointConfigurator sb)
         {
