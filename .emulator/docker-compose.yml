@@ -52,5 +52,65 @@ services:
     networks:
       sb-emulator:
 
+  ticket-service:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.ticket-service
+    container_name: supportpoc-ticket-service
+    environment:
+      ASPNETCORE_ENVIRONMENT: Docker
+      AzureAd__Enabled: ${ENTRA_ENABLED:-false}
+      AzureAd__TenantId: ${ENTRA_TENANT_ID:-}
+      AzureAd__ClientId: ${ENTRA_API_CLIENT_ID:-}
+      AzureAd__Audience: ${ENTRA_API_AUDIENCE:-}
+    ports:
+      - "5001:8080"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      emulator:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    networks:
+      sb-emulator:
+
+  ai-orchestrator:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.ai-orchestrator
+    container_name: supportpoc-ai-orchestrator
+    environment:
+      ASPNETCORE_ENVIRONMENT: Docker
+      LocalMessaging__TicketServiceBaseUrl: http://ticket-service:8080
+      Services__TicketService: http://ticket-service:8080
+      AzureAd__Enabled: ${ENTRA_ENABLED:-false}
+      AzureAd__TenantId: ${ENTRA_TENANT_ID:-}
+      AzureAd__ClientId: ${ENTRA_API_CLIENT_ID:-}
+      AzureAd__Audience: ${ENTRA_API_AUDIENCE:-}
+      AzureAd__McpClientId: ${ENTRA_MCP_CLIENT_ID:-}
+      AzureAd__McpClientSecret: ${ENTRA_MCP_CLIENT_SECRET:-}
+    ports:
+      - "5003:8080"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      emulator:
+        condition: service_started
+      ticket-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/ready >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      sb-emulator:
+
 networks:
   sb-emulator:

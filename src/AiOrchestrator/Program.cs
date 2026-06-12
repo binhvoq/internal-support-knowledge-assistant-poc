@@ -16,6 +16,7 @@ using SupportPoc.Shared.Contracts;
 using SupportPoc.Shared.Data;
 using SupportPoc.Shared.Messaging;
 using SupportPoc.Shared.Models;
+using SupportPoc.Shared.Options;
 using SupportPoc.Shared.Telemetry;
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSupportPocApplicationInsights(builder.Configuration);
@@ -45,13 +46,12 @@ else
 {
     builder.Services.AddKernel();
 }
-var mcpClientRegistration = builder.Services.AddHttpClient(McpToolGateway.HttpClientName);
-if (entraEnabled)
-    mcpClientRegistration.AddHttpMessageHandler<EntraBearerTokenHandler>();
-var knowledgeClientRegistration = builder.Services.AddHttpClient(KnowledgeSearchClient.HttpClientName);
-if (entraEnabled)
-    knowledgeClientRegistration.AddHttpMessageHandler<EntraBearerTokenHandler>();
-builder.Services.AddHttpClient(HttpTicketSnapshotClient.HttpClientName);
+var mcpClientRegistration = builder.Services.AddHttpClient(McpToolGateway.HttpClientName)
+    .AddSupportPocEntraBearerWhenEnabled(entraEnabled);
+var knowledgeClientRegistration = builder.Services.AddHttpClient(KnowledgeSearchClient.HttpClientName)
+    .AddSupportPocEntraBearerWhenEnabled(entraEnabled);
+builder.Services.AddHttpClient(HttpTicketSnapshotClient.HttpClientName)
+    .AddSupportPocEntraBearerWhenEnabled(entraEnabled);
 builder.Services.AddSingleton<McpToolGateway>();
 builder.Services.AddSingleton<McpDynamicPluginLoader>();
 builder.Services.AddSingleton<McpToolAccessService>();
@@ -111,6 +111,17 @@ var app = builder.Build();
 app.UseCors();
 if (entraEnabled)
     app.UseSupportPocEntraAuth();
+if (entraEnabled)
+{
+    var azureAd = app.Configuration.GetSection(AzureAdOptions.SectionName).Get<AzureAdOptions>() ?? new AzureAdOptions();
+    var outboundConfig = EntraOutboundReadinessPolicy.EvaluateConfig(azureAd);
+    if (!outboundConfig.Ready)
+    {
+        app.Logger.LogWarning(
+            "Entra outbound chua san sang — saga reconcile snapshot co the bi 401: {Detail}",
+            outboundConfig.Detail);
+    }
+}
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<OrchestratorDbContext>();
@@ -119,7 +130,9 @@ using (var scope = app.Services.CreateScope())
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "ai-orchestrator" }))
     .AllowAnonymous();
 app.MapGet("/ready", async (
+    HttpContext httpContext,
     IOptions<ServiceBusOptions> sbOpts,
+    IOptions<AzureAdOptions> azureAdOpts,
     CancellationToken cancellationToken) =>
 {
     var pipeline = await MessagingReadinessPolicy.EvaluatePipelineAsync(sbOpts.Value, cancellationToken);
@@ -128,18 +141,41 @@ app.MapGet("/ready", async (
             new { ready = false, transport = pipeline.Transport, detail = pipeline.Detail },
             statusCode: StatusCodes.Status503ServiceUnavailable);
 
+    var azureAd = azureAdOpts.Value;
+    var entraOutbound = await EntraOutboundReadinessPolicy.EvaluateTokenAsync(
+        httpContext.RequestServices,
+        azureAd,
+        cancellationToken);
+    if (azureAd.Enabled && !entraOutbound.Ready)
+        return Results.Json(
+            new
+            {
+                ready = false,
+                transport = pipeline.Transport,
+                detail = pipeline.Detail,
+                entraOutbound = new { ready = false, entraOutbound.Detail },
+                note = "Saga reconcile snapshot can Bearer token cho TicketService."
+            },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+
     return Results.Ok(new
     {
         ready = true,
         transport = pipeline.Transport,
         detail = pipeline.Detail,
+        entraOutbound = new
+        {
+            ready = entraOutbound.Ready,
+            entraOutbound.Detail,
+            ticketSnapshotClient = "EntraBearerTokenHandler"
+        },
         messaging = new
         {
             sagaConsumerOutbox = true,
             aiWorkerConsumerOutbox = true,
             note = "Saga MassTransit Inbox enabled (SQL Server)."
         },
-        note = "Chi kiem tra transport/DNS — khong chung minh consumer dang chay. Dung smoke-test cho end-to-end."
+        note = "Kiem tra transport/DNS va Entra outbound (neu bat). Dung smoke-test cho end-to-end."
     });
 }).AllowAnonymous();
 static string MapSagaStatusForUi(string? currentState) => currentState switch
@@ -296,6 +332,45 @@ app.MapGet("/debug/saga-instances", async (string? ticketId, OrchestratorDbConte
         .ToList();
     return Results.Ok(items);
 }).AllowAnonymous();
+
+app.MapGet("/debug/ticket-snapshot/{ticketId}", async (
+    string ticketId,
+    ITicketSnapshotClient snapshotClient,
+    IConfiguration configuration,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var snapshot = await snapshotClient.GetTicketAsync(ticketId, cancellationToken);
+        return Results.Ok(new
+        {
+            ok = true,
+            entraEnabled = configuration.IsEntraEnabled(),
+            ticketId,
+            snapshotFound = snapshot is not null,
+            snapshot = snapshot is null ? null : new
+            {
+                snapshot.TicketId,
+                snapshot.Status,
+                snapshot.HasAiSuggestion,
+                snapshot.Version
+            }
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Json(
+            new
+            {
+                ok = false,
+                entraEnabled = configuration.IsEntraEnabled(),
+                ticketId,
+                error = ex.Message
+            },
+            statusCode: StatusCodes.Status502BadGateway);
+    }
+}).AllowAnonymous();
+
 app.MapPost("/ai/suggest-answer", async (SuggestAnswerRequest request, TicketSuggestionService service, CancellationToken ct) =>
 {
     if (string.IsNullOrWhiteSpace(request.Question))

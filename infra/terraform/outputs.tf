@@ -1,5 +1,5 @@
 output "resource_group_name" {
-  value = azurerm_resource_group.poc.name
+  value = azurerm_resource_group.main.name
 }
 
 output "storage_account_name" {
@@ -31,7 +31,7 @@ output "openai_chat_endpoint" {
 }
 
 output "application_insights_connection_string" {
-  value     = azurerm_application_insights.poc.connection_string
+  value     = azurerm_application_insights.main.connection_string
   sensitive = true
 }
 
@@ -45,7 +45,7 @@ output "entra_tenant_id" {
 }
 
 output "entra_api_audience" {
-  description = "JWT audience / Application ID URI for Support PoC API."
+  description = "JWT audience / Application ID URI for Internal Support API."
   value       = local.entra_api_audience
 }
 
@@ -55,7 +55,7 @@ output "entra_spa_client_id" {
 }
 
 output "entra_api_client_id" {
-  description = "Application (client) ID for Support PoC API resource server."
+  description = "Application (client) ID for Internal Support API resource server."
   value       = local.entra_enabled ? azuread_application.api[0].client_id : null
 }
 

@@ -12,6 +12,7 @@ logs/
 artifacts/
 test-pdfs/
 .env.local
+.emulator/.env.docker
 config/azure.local.json
 config/azure.resources.state.json
 config/entra.provision.state.json

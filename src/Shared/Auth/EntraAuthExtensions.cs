@@ -76,6 +76,13 @@ public static class EntraAuthExtensions
         return services;
     }
 
+    public static IHttpClientBuilder AddSupportPocEntraBearerWhenEnabled(this IHttpClientBuilder builder, bool entraEnabled)
+    {
+        if (entraEnabled)
+            builder.AddHttpMessageHandler<EntraBearerTokenHandler>();
+        return builder;
+    }
+
     public static WebApplication UseSupportPocEntraAuth(this WebApplication app)
     {
         app.UseAuthentication();

@@ -1,5 +1,4 @@
-# Microsoft Entra ID — Zero Trust Identity pillar (phase 1 foundation).
-# See docs/zero-trust-identity.md for goals, role matrix, and progress.
+# Microsoft Entra ID — Zero Trust Identity (app roles sync with src/Shared/Auth/AppRoleNames.cs).
 
 data "azuread_client_config" "current" {}
 
@@ -109,13 +108,13 @@ resource "azuread_application" "api" {
     requested_access_token_version = 2
 
     oauth2_permission_scope {
-      admin_consent_description  = "Allow Support PoC clients to call APIs on behalf of the signed-in user."
-      admin_consent_display_name = "Access Support PoC API as user"
+      admin_consent_description  = "Allow Internal Support clients to call APIs on behalf of the signed-in user."
+      admin_consent_display_name = "Access Internal Support API as user"
       enabled                    = true
       id                         = local.entra_api_scope_id
       type                       = "User"
       user_consent_description   = "Sign in and use the internal support assistant on your behalf."
-      user_consent_display_name  = "Access Support PoC API"
+      user_consent_display_name  = "Access Internal Support API"
       value                      = "access_as_user"
     }
   }

@@ -1,7 +1,7 @@
 variable "resource_group_name" {
   type        = string
   description = "Azure resource group name."
-  default     = "rg-support-poc-tf"
+  default     = "rg-internal-support-tf"
 }
 
 variable "location" {
@@ -25,7 +25,7 @@ variable "chat_location" {
 variable "prefix" {
   type        = string
   description = "Stable prefix for resource names."
-  default     = "supportpoc"
+  default     = "support"
 }
 
 variable "suffix" {
@@ -128,13 +128,13 @@ variable "tags" {
   type        = map(string)
   description = "Tags applied to Azure resources."
   default = {
-    app         = "support-poc"
+    app         = "internal-support"
     managed_by  = "terraform"
-    environment = "poc"
+    environment = "production"
   }
 }
 
-# ---------- Microsoft Entra ID (Zero Trust Identity — phase 1) ----------
+# ---------- Microsoft Entra ID (Zero Trust Identity) ----------
 
 variable "enable_entra_identity" {
   type        = bool
@@ -199,6 +199,6 @@ variable "bootstrap_role_assignments" {
 
 variable "allow_bootstrap_multi_role_principal" {
   type        = bool
-  description = "Cho phep mot principal giu nhieu app role trong bootstrap (chi nen dung cho PoC demo)."
+  description = "Cho phep mot principal giu nhieu app role trong bootstrap (dev / first deploy)."
   default     = true
 }

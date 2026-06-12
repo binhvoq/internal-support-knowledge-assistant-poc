@@ -4,8 +4,8 @@
     "frontendUrl": "http://localhost:5173/",
     "whyNoReloginOnRefresh": "MSAL cache trong sessionStorage (msal.*) + refresh token.",
     "nextStepsForAi": [
-      "Doc day du: docs/zero-trust-identity.md — PoC Identity DA CHOT (§0, §5); PIM/Identity Protection/CA out-of-scope (§13-§14)",
-      "Restart backend services directly with dotnet run; see scripts/README.md",
+      "Doc ky thuat: docs/technical_learn.md",
+      "Restart backend services directly with dotnet run (Ticket 5001, Knowledge 5002, AI 5003)",
       "E2E: login UI hoac dung apiAccessToken trong file that"
     ]
   },

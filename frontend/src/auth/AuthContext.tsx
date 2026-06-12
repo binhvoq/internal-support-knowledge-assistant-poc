@@ -67,7 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async () => {
     const msal = getMsal();
-    if (!msal) throw new Error('Entra chưa cấu hình (VITE_AAD_*). Chạy sync-config sau provision-entra.');
+    if (!msal) throw new Error('Entra chưa cấu hình (VITE_AAD_*). Copy giá trị từ config/azure.local.json vào frontend/.env.local.');
     await msal.loginRedirect({ scopes: loginScopes() });
   }, []);
 

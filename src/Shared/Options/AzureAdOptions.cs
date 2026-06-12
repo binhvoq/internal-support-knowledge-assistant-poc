@@ -12,9 +12,9 @@ public sealed class AzureAdOptions
     public string ClientId { get; set; } = "";
     public string Audience { get; set; } = "";
     public string? Scope { get; set; }
-    /// <summary>MCP service app — client credentials (phase 4).</summary>
+    /// <summary>MCP service app — client credentials.</summary>
     public string? McpClientId { get; set; }
     public string? McpClientSecret { get; set; }
-    /// <summary>Alias for McpClientSecret on McpToolServer (sync-config writes this key).</summary>
+    /// <summary>Alias for McpClientSecret on McpToolServer.</summary>
     public string? ClientSecret { get; set; }
 }

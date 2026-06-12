@@ -1,4 +1,4 @@
-// App Insights — MCP tool invocation audit (Phase 6)
+// App Insights — MCP tool invocation audit
 // Chạy trong Azure Portal > Application Insights > Logs (workspace-linked)
 
 // 1) Tổng quan allowed vs denied theo thời gian

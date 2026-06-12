@@ -206,7 +206,7 @@ app.MapPost("/documents/upload-pdf", async (
     if (file.Length <= 0)
         return Results.BadRequest(new { error = "PDF khong duoc de trong." });
     if (file.Length > 20 * 1024 * 1024)
-        return Results.BadRequest(new { error = "PDF toi da 20 MB cho POC." });
+        return Results.BadRequest(new { error = "PDF toi da 20 MB." });
     if (!file.FileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)
         && !string.Equals(file.ContentType, "application/pdf", StringComparison.OrdinalIgnoreCase))
         return Results.BadRequest(new { error = "Chi ho tro upload file PDF." });

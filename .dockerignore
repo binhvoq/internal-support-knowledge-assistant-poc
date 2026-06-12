@@ -1,0 +1,12 @@
+**/.git
+**/.vs
+**/.vscode
+**/.cursor
+**/bin
+**/obj
+**/node_modules
+**/TestResults
+**/*.user
+config/azure.local.json
+.emulator/.env.docker
+frontend/dist

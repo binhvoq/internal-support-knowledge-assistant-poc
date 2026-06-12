@@ -1,6 +1,6 @@
 namespace SupportPoc.Shared.Auth;
 
-/// <summary>Entra app roles on Support PoC API — keep in sync with infra/terraform/identity.tf.</summary>
+/// <summary>Entra app roles on Internal Support API — keep in sync with infra/terraform/identity.tf.</summary>
 public static class AppRoleNames
 {
     public const string Employee = "Support.Employee";

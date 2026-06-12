@@ -41,8 +41,8 @@ locals {
   config_path          = abspath("${path.module}/../../config/azure.local.json")
 
   azure_local_config = merge({
-    resourceGroup = azurerm_resource_group.poc.name
-    location      = azurerm_resource_group.poc.location
+    resourceGroup = azurerm_resource_group.main.name
+    location      = azurerm_resource_group.main.location
     serviceBus = {
       connectionString = azurerm_servicebus_namespace_authorization_rule.app.primary_connection_string
       topicName        = azurerm_servicebus_topic.events.name
@@ -64,12 +64,12 @@ locals {
       connectionString = azurerm_storage_account.docs.primary_connection_string
     }
     applicationInsights = {
-      connectionString = azurerm_application_insights.poc.connection_string
+      connectionString = azurerm_application_insights.main.connection_string
     }
   }, local.entra_config != null ? { entra = local.entra_config } : {})
 }
 
-resource "azurerm_resource_group" "poc" {
+resource "azurerm_resource_group" "main" {
   name     = var.resource_group_name
   location = var.location
   tags     = var.tags
@@ -77,8 +77,8 @@ resource "azurerm_resource_group" "poc" {
 
 resource "azurerm_storage_account" "docs" {
   name                     = local.storage_account_name
-  resource_group_name      = azurerm_resource_group.poc.name
-  location                 = azurerm_resource_group.poc.location
+  resource_group_name      = azurerm_resource_group.main.name
+  location                 = azurerm_resource_group.main.location
   account_tier             = "Standard"
   account_replication_type = "LRS"
   min_tls_version          = "TLS1_2"
@@ -93,14 +93,14 @@ resource "azurerm_storage_container" "knowledge_docs" {
 
 resource "azurerm_servicebus_namespace" "bus" {
   name                = local.service_bus_name
-  location            = azurerm_resource_group.poc.location
-  resource_group_name = azurerm_resource_group.poc.name
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
   sku                 = var.service_bus_sku
   tags                = var.tags
 }
 
 resource "azurerm_servicebus_namespace_authorization_rule" "app" {
-  name         = "support-poc-app"
+  name         = "support-app"
   namespace_id = azurerm_servicebus_namespace.bus.id
 
   listen = true
@@ -121,8 +121,8 @@ resource "azurerm_servicebus_subscription" "ai_orchestrator" {
 
 resource "azurerm_search_service" "knowledge" {
   name                = local.search_name
-  resource_group_name = azurerm_resource_group.poc.name
-  location            = azurerm_resource_group.poc.location
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
   sku                 = var.search_sku
   replica_count       = 1
   partition_count     = 1
@@ -132,7 +132,7 @@ resource "azurerm_search_service" "knowledge" {
 resource "azurerm_cognitive_account" "openai_embed" {
   name                = local.openai_embed_name
   location            = var.embedding_location
-  resource_group_name = azurerm_resource_group.poc.name
+  resource_group_name = azurerm_resource_group.main.name
   kind                = "OpenAI"
   sku_name            = "S0"
   tags                = var.tags
@@ -157,7 +157,7 @@ resource "azurerm_cognitive_deployment" "embedding" {
 resource "azurerm_cognitive_account" "openai_chat" {
   name                = local.openai_chat_name
   location            = var.chat_location
-  resource_group_name = azurerm_resource_group.poc.name
+  resource_group_name = azurerm_resource_group.main.name
   kind                = "OpenAI"
   sku_name            = "S0"
   tags                = var.tags
@@ -179,20 +179,20 @@ resource "azurerm_cognitive_deployment" "chat" {
   }
 }
 
-resource "azurerm_log_analytics_workspace" "poc" {
+resource "azurerm_log_analytics_workspace" "main" {
   name                = "${var.prefix}-logs-${var.suffix}"
-  location            = azurerm_resource_group.poc.location
-  resource_group_name = azurerm_resource_group.poc.name
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
   sku                 = "PerGB2018"
   retention_in_days   = var.log_retention_days
   tags                = var.tags
 }
 
-resource "azurerm_application_insights" "poc" {
+resource "azurerm_application_insights" "main" {
   name                = "${var.prefix}-insights-${var.suffix}"
-  location            = azurerm_resource_group.poc.location
-  resource_group_name = azurerm_resource_group.poc.name
-  workspace_id        = azurerm_log_analytics_workspace.poc.id
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
+  workspace_id        = azurerm_log_analytics_workspace.main.id
   application_type    = "web"
   tags                = var.tags
 }

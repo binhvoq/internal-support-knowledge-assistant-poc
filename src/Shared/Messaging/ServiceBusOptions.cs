@@ -107,7 +107,10 @@ public sealed class ServiceBusOptions
     internal static bool IsLocalEmulatorHost(string host) =>
         host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
         || host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase)
-        || host.Equals("host.docker.internal", StringComparison.OrdinalIgnoreCase);
+        || host.Equals("host.docker.internal", StringComparison.OrdinalIgnoreCase)
+        || host.Equals("emulator", StringComparison.OrdinalIgnoreCase)
+        || host.Equals("sb-emulator", StringComparison.OrdinalIgnoreCase)
+        || host.Equals("servicebus-emulator", StringComparison.OrdinalIgnoreCase);
 
     internal static int ResolveEmulatorHealthPort(EndpointInfo endpoint) =>
         endpoint.Port == EmulatorManagementPort ? EmulatorManagementPort : EmulatorManagementPort;
