@@ -19,6 +19,7 @@ using SupportPoc.Shared.Models;
 using SupportPoc.Shared.Options;
 using SupportPoc.Shared.Telemetry;
 var builder = WebApplication.CreateBuilder(args);
+ProductionSecurityGuard.Validate(builder.Environment, builder.Configuration);
 builder.Services.AddSupportPocApplicationInsights(builder.Configuration);
 var entraEnabled = builder.Configuration.IsEntraEnabled();
 if (entraEnabled)
@@ -51,6 +52,11 @@ var mcpClientRegistration = builder.Services.AddHttpClient(McpToolGateway.HttpCl
 var knowledgeClientRegistration = builder.Services.AddHttpClient(KnowledgeSearchClient.HttpClientName)
     .AddSupportPocEntraBearerWhenEnabled(entraEnabled);
 builder.Services.AddHttpClient(HttpTicketSnapshotClient.HttpClientName)
+    .ConfigureHttpClient((sp, client) =>
+    {
+        var reconcileOpts = sp.GetRequiredService<IOptions<AutoSuggestionOptions>>().Value;
+        client.Timeout = TimeSpan.FromSeconds(Math.Max(15, reconcileOpts.ReconcileHttpTimeoutSeconds + 5));
+    })
     .AddSupportPocEntraBearerWhenEnabled(entraEnabled);
 builder.Services.AddSingleton<McpToolGateway>();
 builder.Services.AddSingleton<McpDynamicPluginLoader>();
@@ -62,6 +68,9 @@ builder.Services.AddScoped<IAiPipelineService>(sp => sp.GetRequiredService<AiPip
 builder.Services.AddScoped<IChatCompletionServiceAccessor>();
 builder.Services.AddScoped<TicketSuggestionService>();
 builder.Services.AddScoped<ITicketSnapshotClient, HttpTicketSnapshotClient>();
+builder.Services.AddScoped<ITicketSuggestionReconcileClient, HttpTicketSuggestionReconcileClient>();
+builder.Services.AddScoped<ReconcileTicketSuggestionActivity>();
+builder.Services.AddHostedService<StuckSagaSweeperService>();
 var serviceBus = builder.Configuration.GetSection(ServiceBusOptions.SectionName).Get<ServiceBusOptions>() ?? new ServiceBusOptions();
 builder.Services.AddMassTransit(mt =>
 {
@@ -189,6 +198,54 @@ static string MapSagaStatusForUi(string? currentState) => currentState switch
     SagaProcessState.Failed => AutoSuggestionJobStatus.Failed,
     _ => AutoSuggestionJobStatus.Running
 };
+app.MapGet("/ops/saga-health", async (OrchestratorDbContext db, IOptions<AutoSuggestionOptions> autoOpts) =>
+{
+    var now = DateTimeOffset.UtcNow;
+    var monitored = await db.TicketSuggestionSagas
+        .Where(s =>
+            s.CurrentState == SagaProcessState.Reconciling
+            || s.CurrentState == SagaProcessState.GeneratingSuggestion
+            || s.CurrentState == SagaProcessState.ApplyingSuggestion)
+        .ToListAsync();
+    var reconciling = monitored.Where(s => s.CurrentState == SagaProcessState.Reconciling).ToList();
+    var generating = monitored.Where(s => s.CurrentState == SagaProcessState.GeneratingSuggestion).ToList();
+    var applying = monitored.Where(s => s.CurrentState == SagaProcessState.ApplyingSuggestion).ToList();
+    var retryAfter = TimeSpan.FromMinutes(Math.Max(1, autoOpts.Value.StuckReconcilingRetryAfterMinutes));
+    var failAfter = TimeSpan.FromMinutes(Math.Max(autoOpts.Value.StuckReconcilingRetryAfterMinutes + 1, autoOpts.Value.StuckReconcilingFailAfterMinutes));
+    var stuckStepAfter = TimeSpan.FromMinutes(Math.Max(1, autoOpts.Value.StuckStepSweepAfterMinutes));
+    var stale = reconciling.Where(s => now - s.UpdatedAt >= retryAfter).ToList();
+    var critical = reconciling.Where(s => now - s.UpdatedAt >= failAfter).ToList();
+    var stuckSteps = monitored
+        .Where(s => s.CurrentState is SagaProcessState.GeneratingSuggestion or SagaProcessState.ApplyingSuggestion)
+        .Where(s => now - s.UpdatedAt >= stuckStepAfter)
+        .ToList();
+    return Results.Ok(new
+    {
+        reconcilingCount = reconciling.Count,
+        generatingCount = generating.Count,
+        applyingCount = applying.Count,
+        stuckStepCount = stuckSteps.Count,
+        staleCount = stale.Count,
+        criticalCount = critical.Count,
+        retryAfterMinutes = retryAfter.TotalMinutes,
+        failAfterMinutes = failAfter.TotalMinutes,
+        stuckStepAfterMinutes = stuckStepAfter.TotalMinutes,
+        samples = stale
+            .Concat(stuckSteps)
+            .OrderByDescending(s => s.UpdatedAt)
+            .Take(20)
+            .Select(s => new
+            {
+                s.CorrelationId,
+                s.TicketId,
+                s.JobId,
+                ageMinutes = (now - s.UpdatedAt).TotalMinutes,
+                s.PendingReconcileAction,
+                s.UpdatedAt
+            })
+    });
+}).WithDebugOrServicePolicy(entraEnabled, app.Environment);
+
 app.MapGet("/tickets/{ticketId}/auto-suggestion", async (string ticketId, OrchestratorDbContext db) =>
 {
     var sagas = await db.TicketSuggestionSagas
@@ -211,7 +268,7 @@ app.MapGet("/tickets/{ticketId}/auto-suggestion", async (string ticketId, Orches
         saga.CreatedAt,
         saga.UpdatedAt
     });
-}).AllowAnonymous();
+}).WithUserFacingPolicy(entraEnabled, app.Environment, PolicyNames.AgentOrService);
 app.MapGet("/mcp/tools", async (McpDynamicPluginLoader loader, CancellationToken ct) =>
 {
     var catalog = await loader.LoadCatalogAsync(ct);
@@ -269,7 +326,7 @@ app.MapGet("/debug/dlq", async (string? queue, IOptions<ServiceBusOptions> sbOpt
     {
         return Results.Ok(new { error = ex.Message, queue = queueName });
     }
-}).AllowAnonymous();
+}).WithDebugOrServicePolicy(entraEnabled, app.Environment);
 app.MapGet("/debug/inbox", async (OrchestratorDbContext db) =>
 {
     var items = await db.Set<InboxState>()
@@ -278,7 +335,7 @@ app.MapGet("/debug/inbox", async (OrchestratorDbContext db) =>
         .Select(x => new { x.MessageId, x.ConsumerId, x.Received, x.Consumed, x.ReceiveCount })
         .ToListAsync();
     return Results.Ok(items);
-}).AllowAnonymous();
+}).WithDebugOrServicePolicy(entraEnabled, app.Environment);
 
 app.MapGet("/debug/ai-generation-attempts", async (string? ticketId, Guid? attemptId, OrchestratorDbContext db) =>
 {
@@ -306,7 +363,7 @@ app.MapGet("/debug/ai-generation-attempts", async (string? ticketId, Guid? attem
         })
         .ToList();
     return Results.Ok(items);
-}).AllowAnonymous();
+}).WithDebugOrServicePolicy(entraEnabled, app.Environment);
 
 app.MapGet("/debug/saga-instances", async (string? ticketId, OrchestratorDbContext db) =>
 {
@@ -332,7 +389,7 @@ app.MapGet("/debug/saga-instances", async (string? ticketId, OrchestratorDbConte
         })
         .ToList();
     return Results.Ok(items);
-}).AllowAnonymous();
+}).WithDebugOrServicePolicy(entraEnabled, app.Environment);
 
 app.MapGet("/debug/ticket-snapshot/{ticketId}", async (
     string ticketId,
@@ -370,7 +427,7 @@ app.MapGet("/debug/ticket-snapshot/{ticketId}", async (
             },
             statusCode: StatusCodes.Status502BadGateway);
     }
-}).AllowAnonymous();
+}).WithDebugOrServicePolicy(entraEnabled, app.Environment);
 
 app.MapPost("/ai/suggest-answer", async (SuggestAnswerRequest request, TicketSuggestionService service, CancellationToken ct) =>
 {

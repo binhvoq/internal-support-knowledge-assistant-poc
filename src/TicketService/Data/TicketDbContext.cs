@@ -38,6 +38,7 @@ public sealed class TicketDbContext(DbContextOptions<TicketDbContext> options) :
             entity.HasKey(x => x.CommandId);
             entity.Property(x => x.TicketId).HasMaxLength(32);
             entity.HasIndex(x => x.TicketId);
+            entity.HasIndex(x => new { x.TicketId, x.JobId, x.Accepted });
         });
     }
 }

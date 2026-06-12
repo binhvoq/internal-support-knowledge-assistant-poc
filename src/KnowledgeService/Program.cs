@@ -15,6 +15,7 @@ using SupportPoc.Shared.Messaging;
 using SupportPoc.Shared.Models;
 
 var builder = WebApplication.CreateBuilder(args);
+ProductionSecurityGuard.Validate(builder.Environment, builder.Configuration);
 
 var entraEnabled = builder.Configuration.IsEntraEnabled();
 if (entraEnabled)
@@ -469,7 +470,7 @@ app.MapGet("/debug/idempotency", async (KnowledgeDbContext db) =>
         .Select(x => new { x.Scope, x.Key, x.RequestHash, x.StatusCode, x.CreatedAt })
         .ToList();
     return Results.Ok(items);
-}).AllowAnonymous();
+}).WithDebugOrServicePolicy(entraEnabled, app.Environment);
 
 app.Run();
 

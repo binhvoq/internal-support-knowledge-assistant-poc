@@ -1,7 +1,6 @@
 using System.Text.Json;
 using MassTransit;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using SupportPoc.AiOrchestrator.Options;
 using SupportPoc.Shared.Contracts;
 using SupportPoc.Shared.Models;
@@ -12,6 +11,8 @@ internal static class ReconcileActions
 {
     public const string Propose = "propose";
     public const string Retry = "retry";
+    public const string Complete = "complete";
+    public const string Discard = "discard";
     public const string Fail = "fail";
 }
 
@@ -20,10 +21,32 @@ internal static class ReconcilePlanner
     internal sealed record Outcome(
         string Action,
         string? FailureReason = null,
+        string? DiscardReason = null,
         bool StartNewGenerationAttempt = false,
         bool IncrementProposeRetry = false);
 
-    internal static Outcome Decide(TicketSuggestionSaga saga, AutoSuggestionOptions options)
+    internal static Outcome Decide(
+        TicketSuggestionSaga saga,
+        AutoSuggestionOptions options,
+        AutoSuggestionReconcileResult reconcile) =>
+        reconcile.Decision switch
+        {
+            AutoSuggestionReconcileDecision.AlreadyAppliedBySameJob =>
+                new Outcome(ReconcileActions.Complete),
+            AutoSuggestionReconcileDecision.StillSuggestible =>
+                DecideStillSuggestible(saga, options),
+            AutoSuggestionReconcileDecision.Resolved
+            or AutoSuggestionReconcileDecision.AlreadySuggestedByOtherJob
+            or AutoSuggestionReconcileDecision.VersionChanged =>
+                new Outcome(ReconcileActions.Discard, DiscardReason: reconcile.Reason ?? reconcile.Decision),
+            AutoSuggestionReconcileDecision.NotFound =>
+                new Outcome(ReconcileActions.Fail, reconcile.Reason ?? "Ticket not found."),
+            _ => new Outcome(
+                ReconcileActions.Fail,
+                reconcile.Reason ?? $"Unexpected reconcile decision: {reconcile.Decision}")
+        };
+
+    private static Outcome DecideStillSuggestible(TicketSuggestionSaga saga, AutoSuggestionOptions options)
     {
         if (!string.IsNullOrWhiteSpace(saga.GeneratedSuggestion))
         {
@@ -64,16 +87,20 @@ internal static class TicketSuggestionActivities
         context.Saga.RowVersion = [0, 0, 0, 0, 0, 0, 0, 1];
     }
 
-    internal static void StartNewAttempt(BehaviorContext<TicketSuggestionSaga> context)
+    internal static void StartNewAttempt(TicketSuggestionSaga saga)
     {
-        context.Saga.CurrentAttemptId = Guid.NewGuid();
-        context.Saga.GeneratedCategory = null;
-        context.Saga.GeneratedSuggestion = null;
-        context.Saga.GeneratedRelatedDocumentsJson = "[]";
-        context.Saga.PendingReconcileAction = null;
-        context.Saga.ProposeRetryCount = 0;
-        context.Saga.UpdatedAt = DateTimeOffset.UtcNow;
+        saga.CurrentAttemptId = Guid.NewGuid();
+        saga.GeneratedCategory = null;
+        saga.GeneratedSuggestion = null;
+        saga.GeneratedRelatedDocumentsJson = "[]";
+        saga.PendingReconcileAction = null;
+        saga.ProposeRetryCount = 0;
+        saga.LastProposeCommandId = null;
+        saga.UpdatedAt = DateTimeOffset.UtcNow;
     }
+
+    internal static void StartNewAttempt(BehaviorContext<TicketSuggestionSaga> context) =>
+        StartNewAttempt(context.Saga);
 
     internal static GenerateSuggestionRequested CreateGenerateRequest(BehaviorContext<TicketSuggestionSaga> context) =>
         new(
@@ -96,10 +123,16 @@ internal static class TicketSuggestionActivities
         context.Saga.UpdatedAt = DateTimeOffset.UtcNow;
     }
 
+    internal static Guid GetOrAssignProposeCommandId(TicketSuggestionSaga saga)
+    {
+        var commandId = saga.LastProposeCommandId ?? Guid.NewGuid();
+        saga.LastProposeCommandId = commandId;
+        return commandId;
+    }
+
     internal static ProposeTicketSuggestion CreateProposeRequest(BehaviorContext<TicketSuggestionSaga> context)
     {
-        var commandId = Guid.NewGuid();
-        context.Saga.LastProposeCommandId = commandId;
+        var commandId = GetOrAssignProposeCommandId(context.Saga);
 
         IReadOnlyList<RelatedDocument> related;
         try
@@ -157,35 +190,4 @@ internal static class TicketSuggestionActivities
             .LogInformation("{Audit}", audit);
     }
 
-    internal static void Reconcile(BehaviorContext<TicketSuggestionSaga> context)
-    {
-        var logger = context.GetServiceOrCreateInstance<ILogger<TicketSuggestionStateMachine>>();
-        var options = context.GetServiceOrCreateInstance<IOptions<AutoSuggestionOptions>>().Value;
-
-        context.Saga.PendingReconcileAction = null;
-        var outcome = ReconcilePlanner.Decide(context.Saga, options);
-
-        if (outcome.IncrementProposeRetry)
-        {
-            context.Saga.ProposeRetryCount++;
-            logger.LogInformation(
-                "Reconcile: retry propose via state machine SagaId={SagaId} ProposeRetryCount={ProposeRetryCount}",
-                context.Saga.CorrelationId,
-                context.Saga.ProposeRetryCount);
-        }
-
-        if (outcome.StartNewGenerationAttempt)
-        {
-            context.Saga.RetryCount++;
-            StartNewAttempt(context);
-        }
-
-        if (outcome.FailureReason is not null)
-        {
-            context.Saga.FailureReason = outcome.FailureReason;
-        }
-
-        context.Saga.PendingReconcileAction = outcome.Action;
-        context.Saga.UpdatedAt = DateTimeOffset.UtcNow;
-    }
 }

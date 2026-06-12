@@ -2,6 +2,7 @@ using SupportPoc.McpToolServer.Tools;
 using SupportPoc.Shared.Auth;
 
 var builder = WebApplication.CreateBuilder(args);
+ProductionSecurityGuard.Validate(builder.Environment, builder.Configuration);
 
 var entraEnabled = builder.Configuration.IsEntraEnabled();
 if (entraEnabled)

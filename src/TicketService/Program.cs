@@ -13,6 +13,7 @@ using SupportPoc.TicketService.Data;
 using SupportPoc.TicketService.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+ProductionSecurityGuard.Validate(builder.Environment, builder.Configuration);
 
 var entraEnabled = builder.Configuration.IsEntraEnabled();
 if (entraEnabled)
@@ -24,6 +25,7 @@ var ticketsConnectionString = builder.Configuration.GetConnectionString("Tickets
 builder.Services.AddDbContext<TicketDbContext>(options =>
     DatabaseProvider.ConfigureDbContext(options, ticketsConnectionString));
 builder.Services.AddScoped<ProposeTicketSuggestionApplier>();
+builder.Services.AddScoped<AutoSuggestionReconcileService>();
 builder.Services.AddCors(options =>
     options.AddDefaultPolicy(p => p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
 
@@ -113,7 +115,7 @@ app.MapGet("/debug/outbox", async (TicketDbContext db) =>
         })
         .ToListAsync();
     return Results.Ok(items);
-}).AllowAnonymous();
+}).WithDebugOrServicePolicy(entraEnabled, app.Environment);
 
 app.MapGet("/debug/inbox", async (TicketDbContext db) =>
 {
@@ -123,7 +125,7 @@ app.MapGet("/debug/inbox", async (TicketDbContext db) =>
         .Select(x => new { x.MessageId, x.ConsumerId, x.Received, x.Consumed, x.ReceiveCount })
         .ToListAsync();
     return Results.Ok(items);
-}).AllowAnonymous();
+}).WithDebugOrServicePolicy(entraEnabled, app.Environment);
 
 app.MapGet("/debug/idempotency", async (TicketDbContext db) =>
 {
@@ -133,7 +135,7 @@ app.MapGet("/debug/idempotency", async (TicketDbContext db) =>
         .Select(x => new { x.Scope, x.Key, x.RequestHash, x.StatusCode, x.CreatedAt })
         .ToList();
     return Results.Ok(items);
-}).AllowAnonymous();
+}).WithDebugOrServicePolicy(entraEnabled, app.Environment);
 
 app.MapPost("/tickets", async (
     CreateTicketRequest request,
@@ -241,6 +243,17 @@ app.MapGet("/tickets/mine", async (HttpContext httpContext, TicketDbContext db) 
         .ToListAsync()).OrderByDescending(t => t.CreatedAt).ToList();
     return Results.Ok(items.Select(t => TicketMapper.ToDto(t)));
 }).WithEntraPolicy(entraEnabled, PolicyNames.EmployeeOrAbove);
+
+app.MapGet("/tickets/{ticketId}/auto-suggestion-reconcile", async (
+    string ticketId,
+    Guid jobId,
+    long? expectedVersion,
+    AutoSuggestionReconcileService reconcileService,
+    CancellationToken cancellationToken) =>
+{
+    var result = await reconcileService.ReconcileAsync(ticketId, jobId, expectedVersion, cancellationToken);
+    return Results.Ok(result);
+}).WithEntraPolicy(entraEnabled, PolicyNames.AgentOrService);
 
 app.MapGet("/tickets/{id}", async (string id, HttpContext httpContext, TicketDbContext db) =>
 {

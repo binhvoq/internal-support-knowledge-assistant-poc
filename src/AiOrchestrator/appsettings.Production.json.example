@@ -1,0 +1,20 @@
+{
+  "AzureAd": {
+    "Enabled": true
+  },
+  "ApplicationInsights": {
+    "Enabled": true
+  },
+  "AutoSuggestion": {
+    "StepTimeoutSeconds": 120,
+    "ProposeRequestTimeoutSeconds": 30,
+    "MaxGenerationRetries": 3,
+    "MaxProposeRetries": 3,
+    "ReconcileHttpTimeoutSeconds": 10,
+    "ReconcileHttpMaxRetries": 2,
+    "StuckReconcilingSweepIntervalSeconds": 60,
+    "StuckReconcilingRetryAfterMinutes": 2,
+    "StuckReconcilingFailAfterMinutes": 30,
+    "StuckStepSweepAfterMinutes": 15
+  }
+}

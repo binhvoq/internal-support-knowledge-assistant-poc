@@ -84,6 +84,25 @@ public interface IStepTimeout
     Guid AttemptId { get; }
 }
 
+/// <summary>Background sweeper yeu cau saga dang Reconciling chay lai domain reconcile.</summary>
+public interface IReconcileSweep
+{
+    Guid SagaId { get; }
+}
+
+/// <summary>Background sweeper tu bo saga Reconciling sau khi het thoi gian cho phep.</summary>
+public interface IReconcileAbandon
+{
+    Guid SagaId { get; }
+    string Reason { get; }
+}
+
+/// <summary>Sweeper phat hien saga ket o GeneratingSuggestion/ApplyingSuggestion qua lau.</summary>
+public interface IStuckStepSweep
+{
+    Guid SagaId { get; }
+}
+
 // =========================
 // Intent-based final command (TicketService gate)
 // =========================
@@ -174,6 +193,9 @@ public sealed record SuggestionGenerationFailed(
     string Reason) : ISuggestionGenerationFailed;
 
 public sealed record StepTimeout(Guid SagaId, Guid AttemptId) : IStepTimeout;
+public sealed record ReconcileSweep(Guid SagaId) : IReconcileSweep;
+public sealed record ReconcileAbandon(Guid SagaId, string Reason) : IReconcileAbandon;
+public sealed record StuckStepSweep(Guid SagaId) : IStuckStepSweep;
 
 public sealed record ProposeTicketSuggestion(
     Guid CommandId,
