@@ -17,7 +17,7 @@ public interface IAiPipelineService
         CancellationToken cancellationToken);
 }
 
-// Classify + Search + Generate — dung boi GenerateSuggestionRequestedConsumer (saga AI worker).
+// Classify + Search + Generate — dung boi AiGenerationWorkerService (durable background job).
 public sealed class AiPipelineService : IAiPipelineService
 {
     private readonly IKnowledgeSearchClient _knowledge;

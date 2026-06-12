@@ -26,4 +26,13 @@ public sealed class AutoSuggestionOptions
 
     /// <summary>Saga ket o GeneratingSuggestion/ApplyingSuggestion qua nguong nay thi sweeper can thiep (phut).</summary>
     public int StuckStepSweepAfterMinutes { get; set; } = 15;
+
+    /// <summary>Chu ky poll durable AI generation jobs (giay).</summary>
+    public int AiGenerationWorkerPollIntervalSeconds { get; set; } = 2;
+
+    /// <summary>So job AI generation chay dong thoi tren moi instance.</summary>
+    public int AiGenerationWorkerConcurrency { get; set; } = 2;
+
+    /// <summary>Lease khi worker claim attempt (giay) — phai du lon cho HTTP/LLM.</summary>
+    public int AiGenerationLeaseSeconds { get; set; } = 300;
 }

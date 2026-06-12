@@ -70,7 +70,9 @@ builder.Services.AddScoped<TicketSuggestionService>();
 builder.Services.AddScoped<ITicketSnapshotClient, HttpTicketSnapshotClient>();
 builder.Services.AddScoped<ITicketSuggestionReconcileClient, HttpTicketSuggestionReconcileClient>();
 builder.Services.AddScoped<ReconcileTicketSuggestionActivity>();
+builder.Services.AddScoped<AiGenerationFinalizer>();
 builder.Services.AddHostedService<StuckSagaSweeperService>();
+builder.Services.AddHostedService<AiGenerationWorkerService>();
 var serviceBus = builder.Configuration.GetSection(ServiceBusOptions.SectionName).Get<ServiceBusOptions>() ?? new ServiceBusOptions();
 var duplicateDetectionWindow = TimeSpan.FromHours(1);
 builder.Services.AddMassTransit(mt =>
@@ -367,6 +369,10 @@ app.MapGet("/debug/ai-generation-attempts", async (string? ticketId, Guid? attem
             x.Category,
             hasSuggestion = !string.IsNullOrWhiteSpace(x.Suggestion),
             x.Error,
+            x.RetryCount,
+            x.NextRunAt,
+            x.LeaseOwner,
+            x.LeaseUntil,
             x.StartedAt,
             x.CompletedAt,
             x.UpdatedAt

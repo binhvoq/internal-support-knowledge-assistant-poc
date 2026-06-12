@@ -19,9 +19,14 @@ public sealed class OrchestratorDbContext(DbContextOptions<OrchestratorDbContext
         {
             entity.HasKey(x => x.AttemptId);
             entity.Property(x => x.TicketId).HasMaxLength(32);
+            entity.Property(x => x.Question).HasMaxLength(4000);
+            entity.Property(x => x.RequestedCategory).HasMaxLength(32);
             entity.Property(x => x.Status).HasMaxLength(16);
             entity.Property(x => x.Category).HasMaxLength(32);
+            entity.Property(x => x.LeaseOwner).HasMaxLength(64);
             entity.Property(x => x.RelatedDocumentsJson).HasDefaultValue("[]");
+            entity.Property(x => x.RowVersion).IsRowVersion().HasDefaultValue(new byte[] { 0, 0, 0, 0, 0, 0, 0, 1 });
+            entity.HasIndex(x => new { x.Status, x.NextRunAt, x.LeaseUntil });
         });
 
         modelBuilder.Entity<TicketSuggestionSaga>(entity =>

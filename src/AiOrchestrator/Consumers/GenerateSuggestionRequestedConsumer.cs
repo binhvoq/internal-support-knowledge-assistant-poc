@@ -2,28 +2,24 @@ using System.Text.Json;
 using MassTransit;
 using Microsoft.EntityFrameworkCore;
 using SupportPoc.AiOrchestrator.Data;
-using SupportPoc.AiOrchestrator.Services;
 using SupportPoc.Shared.Contracts;
 using SupportPoc.Shared.Models;
 using SupportPoc.Shared.Testing;
 
 namespace SupportPoc.AiOrchestrator.Consumers;
 
-/// <summary>AI worker — chi chay pipeline va reply ve saga, khong goi TicketService.</summary>
+/// <summary>Claim/replay durable AI job — khong goi pipeline; worker xu ly LLM/HTTP ngoai consumer transaction.</summary>
 public sealed class GenerateSuggestionRequestedConsumer : IConsumer<IGenerateSuggestionRequested>
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    private readonly IAiPipelineService _pipeline;
     private readonly OrchestratorDbContext _db;
     private readonly ILogger<GenerateSuggestionRequestedConsumer> _logger;
 
     public GenerateSuggestionRequestedConsumer(
-        IAiPipelineService pipeline,
         OrchestratorDbContext db,
         ILogger<GenerateSuggestionRequestedConsumer> logger)
     {
-        _pipeline = pipeline;
         _db = db;
         _logger = logger;
     }
@@ -57,53 +53,20 @@ public sealed class GenerateSuggestionRequestedConsumer : IConsumer<IGenerateSug
             return;
         }
 
-        if (!await TryClaimAttemptAsync(msg, context.CancellationToken))
+        if (!await TryEnqueueAttemptAsync(msg, context.CancellationToken))
         {
             existing = await _db.AiGenerationAttempts
                 .AsNoTracking()
                 .FirstOrDefaultAsync(x => x.AttemptId == msg.AttemptId, context.CancellationToken);
             if (existing is not null)
-            {
                 await ReplayOrDeferStoredOutcomeAsync(context, msg, existing);
-                return;
-            }
+            return;
         }
 
-        var attempt = await _db.AiGenerationAttempts
-            .FirstAsync(x => x.AttemptId == msg.AttemptId, context.CancellationToken);
-
-        try
-        {
-            var result = await _pipeline.RunAsync(msg.Question, msg.Category, context.CancellationToken);
-            var now = DateTimeOffset.UtcNow;
-            attempt.Status = AiGenerationAttemptStatus.Completed;
-            attempt.Category = result.Category;
-            attempt.Suggestion = result.Suggestion;
-            attempt.RelatedDocumentsJson = JsonSerializer.Serialize(result.Related, JsonOptions);
-            attempt.Error = null;
-            attempt.CompletedAt = now;
-            attempt.UpdatedAt = now;
-            await _db.SaveChangesAsync(context.CancellationToken);
-
-            await PublishGeneratedAsync(context, msg, result.Category, result.Suggestion, result.Related);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(
-                ex,
-                "Suggestion generation failed SagaId={SagaId} AttemptId={AttemptId}",
-                msg.SagaId,
-                msg.AttemptId);
-
-            var now = DateTimeOffset.UtcNow;
-            attempt.Status = AiGenerationAttemptStatus.Failed;
-            attempt.Error = ex.Message;
-            attempt.CompletedAt = now;
-            attempt.UpdatedAt = now;
-            await _db.SaveChangesAsync(context.CancellationToken);
-
-            await PublishFailedAsync(context, msg, ex.Message);
-        }
+        _logger.LogInformation(
+            "AI attempt enqueued for background worker SagaId={SagaId} AttemptId={AttemptId}",
+            msg.SagaId,
+            msg.AttemptId);
     }
 
     private async Task ReplayOrDeferStoredOutcomeAsync(
@@ -138,13 +101,13 @@ public sealed class GenerateSuggestionRequestedConsumer : IConsumer<IGenerateSug
         }
 
         _logger.LogInformation(
-            "AI attempt already running SagaId={SagaId} AttemptId={AttemptId}; duplicate delivery deferred.",
+            "AI attempt already pending/running SagaId={SagaId} AttemptId={AttemptId} Status={Status}; duplicate delivery ignored.",
             msg.SagaId,
-            msg.AttemptId);
-        throw new InvalidOperationException($"AI generation attempt {msg.AttemptId} is already running.");
+            msg.AttemptId,
+            existing.Status);
     }
 
-    private async Task<bool> TryClaimAttemptAsync(IGenerateSuggestionRequested msg, CancellationToken cancellationToken)
+    private async Task<bool> TryEnqueueAttemptAsync(IGenerateSuggestionRequested msg, CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
         _db.AiGenerationAttempts.Add(new AiGenerationAttemptEntity
@@ -153,7 +116,9 @@ public sealed class GenerateSuggestionRequestedConsumer : IConsumer<IGenerateSug
             SagaId = msg.SagaId,
             JobId = msg.JobId,
             TicketId = msg.TicketId,
-            Status = AiGenerationAttemptStatus.Running,
+            Question = msg.Question,
+            RequestedCategory = msg.Category,
+            Status = AiGenerationAttemptStatus.Pending,
             RelatedDocumentsJson = "[]",
             StartedAt = now,
             UpdatedAt = now
@@ -168,7 +133,7 @@ public sealed class GenerateSuggestionRequestedConsumer : IConsumer<IGenerateSug
         {
             _logger.LogWarning(
                 ex,
-                "AI attempt claim race AttemptId={AttemptId} — reload stored outcome if available.",
+                "AI attempt enqueue race AttemptId={AttemptId} — reload stored outcome if available.",
                 msg.AttemptId);
             _db.ChangeTracker.Clear();
             return false;
