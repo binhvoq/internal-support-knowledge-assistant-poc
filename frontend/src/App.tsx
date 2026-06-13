@@ -680,7 +680,7 @@ function KnowledgeView() {
 }
 
 function ChatView() {
-  const [message, setMessage] = useState('Ticket TCK-001 cua toi xu ly den dau roi?');
+  const [message, setMessage] = useState('Ticket 01932b5c7f8a7f8a81b2c3d4e5f67890 cua toi xu ly den dau roi?');
   const [reply, setReply] = useState('');
   const [loading, setLoading] = useState(false);
 

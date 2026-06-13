@@ -90,7 +90,7 @@ public sealed class StuckSagaSweeperTests
         {
             CorrelationId = Guid.NewGuid(),
             JobId = Guid.NewGuid(),
-            TicketId = "TCK-1",
+            TicketId = TestTicketIds.Default,
             CurrentState = state,
             UpdatedAt = DateTimeOffset.UtcNow - age,
             CreatedAt = DateTimeOffset.UtcNow - age

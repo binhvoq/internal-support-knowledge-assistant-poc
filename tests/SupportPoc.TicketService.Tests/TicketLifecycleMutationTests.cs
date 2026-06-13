@@ -33,7 +33,7 @@ public sealed class TicketLifecycleMutationTests
 
     private static TicketEntity NewTicket(string status) => new()
     {
-        Id = "TCK-LC",
+        Id = TestTicketIds.Lifecycle,
         EmployeeId = "EMP-1",
         Category = SupportCategory.IT,
         Question = "Q",

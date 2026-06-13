@@ -186,10 +186,9 @@ app.MapPost("/tickets", async (
 
     var category = string.IsNullOrWhiteSpace(request.Category) ? SupportCategory.Other : request.Category;
     var now = DateTimeOffset.UtcNow;
-    var ids = await db.Tickets.Select(t => t.Id).ToListAsync();
     var entity = new TicketEntity
     {
-        Id = TicketIdGenerator.Next(ids),
+        Id = TicketIdGenerator.NewId(),
         EmployeeId = employeeId,
         OwnerOid = isService ? null : ownerOid,
         Category = category,

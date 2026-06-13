@@ -23,7 +23,7 @@ public sealed class AutoSuggestionReconcileServiceTests : IDisposable
     [Fact]
     public async Task Reconcile_returns_not_found_when_ticket_missing()
     {
-        var result = await _service.ReconcileAsync("TCK-MISSING", _jobId, 1);
+        var result = await _service.ReconcileAsync(TestTicketIds.Missing, _jobId, 1);
 
         Assert.Equal(AutoSuggestionReconcileDecision.NotFound, result.Decision);
     }
@@ -34,14 +34,14 @@ public sealed class AutoSuggestionReconcileServiceTests : IDisposable
         _db.ProcessedCommands.Add(new ProcessedCommandEntity
         {
             CommandId = Guid.NewGuid(),
-            TicketId = "TCK-GONE",
+            TicketId = TestTicketIds.Gone,
             JobId = _jobId,
             Accepted = true,
             ProcessedAt = DateTimeOffset.UtcNow
         });
         await _db.SaveChangesAsync();
 
-        var result = await _service.ReconcileAsync("TCK-GONE", _jobId, 1);
+        var result = await _service.ReconcileAsync(TestTicketIds.Gone, _jobId, 1);
 
         Assert.Equal(AutoSuggestionReconcileDecision.AlreadyAppliedBySameJob, result.Decision);
         Assert.NotEqual(AutoSuggestionReconcileDecision.NotFound, result.Decision);
@@ -126,7 +126,7 @@ public sealed class AutoSuggestionReconcileServiceTests : IDisposable
     {
         var ticket = new TicketEntity
         {
-            Id = "TCK-1",
+            Id = TestTicketIds.Default,
             EmployeeId = "EMP-1",
             Category = SupportCategory.IT,
             Question = "Q",

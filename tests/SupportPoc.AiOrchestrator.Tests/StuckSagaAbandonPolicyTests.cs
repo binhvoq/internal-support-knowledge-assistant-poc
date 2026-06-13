@@ -13,7 +13,7 @@ public sealed class StuckSagaAbandonPolicyTests
     [InlineData(AutoSuggestionReconcileDecision.VersionChanged)]
     public void Decide_returns_reconcile_sweep_for_recoverable_domain_decisions(string decision)
     {
-        var reconcile = new AutoSuggestionReconcileResult("TCK-1", Guid.NewGuid(), decision, null, TicketStatus.New, 1, false, false);
+        var reconcile = new AutoSuggestionReconcileResult(TestTicketIds.Default, Guid.NewGuid(), decision, null, TicketStatus.New, 1, false, false);
 
         var resolved = StuckSagaAbandonPolicy.Decide(reconcile, reconcileError: null);
 
@@ -24,7 +24,7 @@ public sealed class StuckSagaAbandonPolicyTests
     public void Decide_abandons_when_ticket_not_found()
     {
         var reconcile = new AutoSuggestionReconcileResult(
-            "TCK-1",
+            TestTicketIds.Default,
             Guid.NewGuid(),
             AutoSuggestionReconcileDecision.NotFound,
             "Ticket not found.",

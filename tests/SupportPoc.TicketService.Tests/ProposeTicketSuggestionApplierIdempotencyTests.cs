@@ -31,9 +31,9 @@ public sealed class ProposeTicketSuggestionApplierIdempotencyTests : IDisposable
     {
         var commandId = Guid.NewGuid();
         var jobId = Guid.NewGuid();
-        await SeedTicketAsync("TCK-001", TicketStatus.New, version: 1);
+        await SeedTicketAsync(TestTicketIds.Default, TicketStatus.New, version: 1);
 
-        var msg = CreateMessage(commandId, jobId, "TCK-001", expectedVersion: 1);
+        var msg = CreateMessage(commandId, jobId, TestTicketIds.Default, expectedVersion: 1);
         var first = await _applier.ApplyAsync(msg);
         var second = await _applier.ApplyAsync(msg);
 
@@ -50,12 +50,12 @@ public sealed class ProposeTicketSuggestionApplierIdempotencyTests : IDisposable
     [Fact]
     public async Task Different_CommandId_from_other_job_does_not_mutate_ticket_again()
     {
-        await SeedTicketAsync("TCK-002", TicketStatus.New, version: 1);
+        await SeedTicketAsync(TestTicketIds.Second, TicketStatus.New, version: 1);
 
         var accepted = await _applier.ApplyAsync(
-            CreateMessage(Guid.NewGuid(), Guid.NewGuid(), "TCK-002", expectedVersion: 1));
+            CreateMessage(Guid.NewGuid(), Guid.NewGuid(), TestTicketIds.Second, expectedVersion: 1));
         var replay = await _applier.ApplyAsync(
-            CreateMessage(Guid.NewGuid(), Guid.NewGuid(), "TCK-002", expectedVersion: 2));
+            CreateMessage(Guid.NewGuid(), Guid.NewGuid(), TestTicketIds.Second, expectedVersion: 2));
 
         Assert.True(accepted.Accepted);
         Assert.False(replay.Accepted);

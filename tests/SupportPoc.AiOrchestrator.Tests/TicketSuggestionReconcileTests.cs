@@ -172,7 +172,7 @@ public sealed class TicketSuggestionReconcileTests
     }
 
     private static AutoSuggestionReconcileResult Reconcile(string decision, string? reason = null) =>
-        new("TCK-1", Guid.NewGuid(), decision, reason, TicketStatus.New, 1, false, false);
+        new(TestTicketIds.Default, Guid.NewGuid(), decision, reason, TicketStatus.New, 1, false, false);
 
     private sealed class ThrowingReconcileClient(Exception exception) : ITicketSuggestionReconcileClient
     {
@@ -201,7 +201,7 @@ public sealed class TicketSuggestionReconcileTests
         new()
         {
             CorrelationId = Guid.NewGuid(),
-            TicketId = "TCK-1",
+            TicketId = TestTicketIds.Default,
             RetryCount = retryCount,
             ProposeRetryCount = proposeRetryCount,
             GeneratedSuggestion = generatedSuggestion

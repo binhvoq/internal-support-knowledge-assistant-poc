@@ -42,7 +42,7 @@ public sealed class AutoSuggestionRulesTests
 
     private static TicketEntity NewTicket(string status) => new()
     {
-        Id = "TCK-1",
+        Id = TestTicketIds.Default,
         EmployeeId = "EMP-1",
         Category = SupportCategory.IT,
         Question = "Q",

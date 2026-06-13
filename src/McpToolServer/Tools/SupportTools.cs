@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Net.Http.Json;
 using System.Text.Json;
 using ModelContextProtocol.Server;
+using SupportPoc.Shared;
 using SupportPoc.Shared.Auth;
 
 namespace SupportPoc.McpToolServer.Tools;
@@ -43,7 +44,7 @@ public sealed class SupportTools(IHttpClientFactory httpClientFactory)
         Notes = "Privileged ticket lookup. Employee-scoped reads need a separate get_my_ticket/user-context design.")]
     [Description("Lay chi tiet ticket ho tro theo ticketId.")]
     public async Task<string> GetTicket(
-        [Description("Ma ticket, vi du TCK-001")] string ticketId,
+        [Description($"ID ticket 32 ky tu hex (UUIDv7), vi du {TicketIds.Example}")] string ticketId,
         CancellationToken cancellationToken = default)
     {
         var response = await TicketClient.GetAsync($"/tickets/{ticketId}", cancellationToken);
@@ -70,7 +71,7 @@ public sealed class SupportTools(IHttpClientFactory httpClientFactory)
         Notes = "Mutates ticket state. TicketService still owns resource-level authorization and state transition rules.")]
     [Description("Cap nhat trang thai ticket.")]
     public async Task<string> UpdateTicketStatus(
-        [Description("Ma ticket")] string ticketId,
+        [Description($"ID ticket 32 ky tu hex (UUIDv7), vi du {TicketIds.Example}")] string ticketId,
         [Description("Trang thai moi")] string status,
         [Description("Cau tra loi cuoi khi resolve")] string? finalAnswer = null,
         CancellationToken cancellationToken = default)

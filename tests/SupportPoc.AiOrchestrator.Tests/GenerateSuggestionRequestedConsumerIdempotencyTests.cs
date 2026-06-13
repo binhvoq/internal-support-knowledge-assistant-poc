@@ -114,7 +114,7 @@ public sealed class GenerateSuggestionRequestedConsumerIdempotencyTests : IDispo
             Guid.NewGuid(),
             Guid.NewGuid(),
             Guid.NewGuid(),
-            "TCK-AI-1",
+            TestTicketIds.AiConsumer,
             "How do I reset my password?",
             SupportCategory.IT);
 

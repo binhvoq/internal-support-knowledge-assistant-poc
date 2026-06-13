@@ -112,7 +112,7 @@ public sealed class ProposeTicketSuggestionTransportInboxTests : IAsyncLifetime
             Guid.NewGuid(),
             Guid.NewGuid(),
             Guid.NewGuid(),
-            "TCK-INBOX",
+            TestTicketIds.Inbox,
             SupportCategory.IT,
             "suggested answer",
             [],
@@ -123,7 +123,7 @@ public sealed class ProposeTicketSuggestionTransportInboxTests : IAsyncLifetime
         var now = DateTimeOffset.UtcNow;
         db.Tickets.Add(new TicketEntity
         {
-            Id = "TCK-INBOX",
+            Id = TestTicketIds.Inbox,
             EmployeeId = "emp@test",
             Category = SupportCategory.Other,
             Question = "question?",

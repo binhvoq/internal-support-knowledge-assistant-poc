@@ -1,7 +1,7 @@
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
+using SupportPoc.Shared;
 using SupportPoc.Shared.Formatting;
 using SupportPoc.Shared.Models;
 using Microsoft.SemanticKernel;
@@ -105,7 +105,7 @@ public sealed class TicketSuggestionService
         IEnumerable<string>? roles,
         CancellationToken cancellationToken)
     {
-        var ticketId = Regex.Match(message, @"TCK-\d+", RegexOptions.IgnoreCase).Value.ToUpperInvariant();
+        var ticketId = TicketIds.TryExtractFromText(message);
         if (!string.IsNullOrWhiteSpace(ticketId))
         {
             var catalog = await _mcpLoader.LoadCatalogAsync(cancellationToken);
@@ -123,7 +123,7 @@ public sealed class TicketSuggestionService
             return raw;
         }
 
-        return "Azure OpenAI chua san sang. Fallback local chi ho tro hoi trang thai ticket theo ma TCK-xxx.";
+        return $"Azure OpenAI chua san sang. Fallback local chi ho tro hoi trang thai ticket khi message chua ID 32 ky tu hex (vi du {TicketIds.Example}).";
     }
 
     private static readonly JsonSerializerOptions TicketJsonOptions = new()
