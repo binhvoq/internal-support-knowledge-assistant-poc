@@ -12,8 +12,10 @@ public sealed class ReconcileTicketSuggestionActivity(
     ITicketSuggestionReconcileClient reconcileClient,
     IOptions<AutoSuggestionOptions> options,
     ILogger<TicketSuggestionStateMachine> logger,
-    IServiceProvider serviceProvider) : IStateMachineActivity<TicketSuggestionSaga>
+    IServiceProvider serviceProvider,
+    ISagaReconcileFailureStore failureStore) : IStateMachineActivity<TicketSuggestionSaga>
 {
+    private readonly ISagaReconcileFailureStore _failureStore = failureStore;
     public void Probe(ProbeContext context) => context.CreateScope("reconcile-ticket-suggestion");
 
     public void Accept(StateMachineVisitor visitor) => visitor.Visit(this);
@@ -48,16 +50,21 @@ public sealed class ReconcileTicketSuggestionActivity(
     {
         var saga = context.Saga;
         saga.PendingReconcileAction = null;
+        var now = DateTimeOffset.UtcNow;
+        ReconcileTransientTracker.EnsureReconcilingSince(saga, now);
 
         try
         {
-            var (outcome, reconcile) = await ResolveReconcileOutcomeAsync(
-                saga,
-                options.Value,
-                reconcileClient,
-                context.CancellationToken);
+        var (outcome, reconcile) = await ResolveReconcileOutcomeAsync(
+            saga,
+            options.Value,
+            reconcileClient,
+            context.CancellationToken);
 
-            var telemetry = serviceProvider.TryGetTelemetryClient();
+        ReconcileTransientTracker.RecordSuccess(saga, now);
+        await _failureStore.RecordSuccessAsync(saga.CorrelationId, now, context.CancellationToken);
+
+        var telemetry = serviceProvider.TryGetTelemetryClient();
             SagaReconcileTelemetry.TrackDecision(
                 telemetry,
                 reconcile.Decision,
@@ -76,6 +83,8 @@ public sealed class ReconcileTicketSuggestionActivity(
         }
         catch (Exception ex)
         {
+            ReconcileTransientTracker.RecordTransientFailure(saga, now);
+            await _failureStore.RecordTransientFailureAsync(saga.CorrelationId, now, context.CancellationToken);
             SagaReconcileTelemetry.TrackHttpFailure(
                 serviceProvider.TryGetTelemetryClient(),
                 saga.CorrelationId,
@@ -83,9 +92,10 @@ public sealed class ReconcileTicketSuggestionActivity(
                 ex.GetType().Name);
             logger.LogWarning(
                 ex,
-                "Reconcile: TicketService call failed; message will be retried SagaId={SagaId} TicketId={TicketId}",
+                "Reconcile: TicketService call failed; message will be retried SagaId={SagaId} TicketId={TicketId} FailureCount={FailureCount}",
                 saga.CorrelationId,
-                saga.TicketId);
+                saga.TicketId,
+                saga.ReconcileTransientFailureCount);
             throw;
         }
     }

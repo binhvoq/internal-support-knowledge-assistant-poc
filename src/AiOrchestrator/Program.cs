@@ -70,6 +70,9 @@ builder.Services.AddScoped<TicketSuggestionService>();
 builder.Services.AddScoped<ITicketSnapshotClient, HttpTicketSnapshotClient>();
 builder.Services.AddScoped<ITicketSuggestionReconcileClient, HttpTicketSuggestionReconcileClient>();
 builder.Services.AddScoped<ReconcileTicketSuggestionActivity>();
+builder.Services.AddScoped<ReconcileUnknownRedriveActivity>();
+builder.Services.AddScoped<ISagaReconcileFailureStore, SagaReconcileFailureStore>();
+builder.Services.AddScoped<ISagaReconciliationQueue, SagaReconciliationQueue>();
 builder.Services.AddScoped<AiGenerationFinalizer>();
 builder.Services.AddHostedService<StuckSagaSweeperService>();
 builder.Services.AddHostedService<AiGenerationWorkerService>();
@@ -200,6 +203,7 @@ static string MapSagaStatusForUi(string? currentState) => currentState switch
     SagaProcessState.GeneratingSuggestion => AutoSuggestionJobStatus.Running,
     SagaProcessState.ApplyingSuggestion => AutoSuggestionJobStatus.Produced,
     SagaProcessState.Reconciling => AutoSuggestionJobStatus.Running,
+    SagaProcessState.ReconcileUnknown => AutoSuggestionJobStatus.Unknown,
     SagaProcessState.Completed => AutoSuggestionJobStatus.Completed,
     SagaProcessState.Discarded => AutoSuggestionJobStatus.Discarded,
     SagaProcessState.Failed => AutoSuggestionJobStatus.Failed,
@@ -215,13 +219,26 @@ app.MapGet("/ops/saga-health", async (OrchestratorDbContext db, IOptions<AutoSug
             || s.CurrentState == SagaProcessState.ApplyingSuggestion)
         .ToListAsync();
     var reconciling = monitored.Where(s => s.CurrentState == SagaProcessState.Reconciling).ToList();
+    var reconcileUnknown = await db.TicketSuggestionSagas
+        .Where(s => s.CurrentState == SagaProcessState.ReconcileUnknown)
+        .ToListAsync();
+    var unknownItems = reconcileUnknown.Count == 0
+        ? []
+        : await db.SagaReconciliationItems
+            .Where(x => reconcileUnknown.Select(s => s.CorrelationId).Contains(x.SagaId))
+            .ToListAsync();
     var generating = monitored.Where(s => s.CurrentState == SagaProcessState.GeneratingSuggestion).ToList();
     var applying = monitored.Where(s => s.CurrentState == SagaProcessState.ApplyingSuggestion).ToList();
     var retryAfter = TimeSpan.FromMinutes(Math.Max(1, autoOpts.Value.StuckReconcilingRetryAfterMinutes));
     var failAfter = TimeSpan.FromMinutes(Math.Max(autoOpts.Value.StuckReconcilingRetryAfterMinutes + 1, autoOpts.Value.StuckReconcilingFailAfterMinutes));
     var stuckStepAfter = TimeSpan.FromMinutes(Math.Max(1, autoOpts.Value.StuckStepSweepAfterMinutes));
-    var stale = reconciling.Where(s => now - s.UpdatedAt >= retryAfter).ToList();
-    var critical = reconciling.Where(s => now - s.UpdatedAt >= failAfter).ToList();
+    static double GetEffectiveAgeMinutes(TicketSuggestionSaga s, DateTimeOffset n) =>
+        s.CurrentState == SagaProcessState.Reconciling
+            ? SupportPoc.AiOrchestrator.Services.ReconcileTransientTracker.GetReconcilingAge(s, n).TotalMinutes
+            : (n - s.UpdatedAt).TotalMinutes;
+
+    var stale = reconciling.Where(s => ReconcileTransientTracker.GetReconcilingAge(s, now) >= retryAfter).ToList();
+    var critical = reconciling.Where(s => ReconcileTransientTracker.GetReconcilingAge(s, now) >= failAfter).ToList();
     var stuckSteps = monitored
         .Where(s => s.CurrentState is SagaProcessState.GeneratingSuggestion or SagaProcessState.ApplyingSuggestion)
         .Where(s => now - s.UpdatedAt >= stuckStepAfter)
@@ -229,6 +246,9 @@ app.MapGet("/ops/saga-health", async (OrchestratorDbContext db, IOptions<AutoSug
     return Results.Ok(new
     {
         reconcilingCount = reconciling.Count,
+        reconcileUnknownCount = reconcileUnknown.Count,
+        reconcileUnknownPendingRedrive = unknownItems.Count(x => x.ResolvedAt is null && x.AttemptCount < autoOpts.Value.MaxReconcileUnknownRedriveAttempts),
+        reconcileUnknownExhausted = unknownItems.Count(x => x.ResolvedAt is null && x.AttemptCount >= autoOpts.Value.MaxReconcileUnknownRedriveAttempts),
         generatingCount = generating.Count,
         applyingCount = applying.Count,
         stuckStepCount = stuckSteps.Count,
@@ -239,17 +259,120 @@ app.MapGet("/ops/saga-health", async (OrchestratorDbContext db, IOptions<AutoSug
         stuckStepAfterMinutes = stuckStepAfter.TotalMinutes,
         samples = stale
             .Concat(stuckSteps)
-            .OrderByDescending(s => s.UpdatedAt)
+            .OrderByDescending(s => GetEffectiveAgeMinutes(s, now))
             .Take(20)
             .Select(s => new
             {
                 s.CorrelationId,
                 s.TicketId,
                 s.JobId,
-                ageMinutes = (now - s.UpdatedAt).TotalMinutes,
+                ageMinutes = GetEffectiveAgeMinutes(s, now),
                 s.PendingReconcileAction,
-                s.UpdatedAt
+                s.UpdatedAt,
+                reconcilingSinceAt = s.ReconcilingSinceAt
             })
+    });
+}).WithDebugOrServicePolicy(entraEnabled, app.Environment);
+
+app.MapGet("/ops/reconcile-unknown", async (
+    OrchestratorDbContext db,
+    IOptions<AutoSuggestionOptions> autoOpts,
+    ISagaReconciliationQueue reconciliationQueue,
+    int? take) =>
+{
+    var limit = Math.Clamp(take ?? 50, 1, 200);
+    var now = DateTimeOffset.UtcNow;
+    var opts = autoOpts.Value;
+    var unknownSagas = await db.TicketSuggestionSagas
+        .Where(s => s.CurrentState == SagaProcessState.ReconcileUnknown)
+        .ToListAsync();
+
+    if (unknownSagas.Count > 0)
+        await reconciliationQueue.BackfillMissingItemsAsync(unknownSagas);
+
+    var items = unknownSagas.Count == 0
+        ? new Dictionary<Guid, SagaReconciliationItem>()
+        : await db.SagaReconciliationItems
+            .Where(x => unknownSagas.Select(s => s.CorrelationId).Contains(x.SagaId))
+            .ToDictionaryAsync(x => x.SagaId);
+
+    var views = ReconcileUnknownProjection
+        .OrderForOps(unknownSagas.Select(s => ReconcileUnknownProjection.Project(
+            s,
+            items.GetValueOrDefault(s.CorrelationId),
+            opts,
+            now)))
+        .Take(limit)
+        .Select(v => new
+        {
+            sagaId = v.SagaId,
+            correlationId = v.SagaId,
+            v.TicketId,
+            jobId = v.JobId,
+            failureReason = v.FailureReason,
+            createdAt = v.CreatedAt,
+            updatedAt = v.UpdatedAt,
+            reconciliationCreatedAt = v.ReconciliationCreatedAt,
+            lastAttemptAt = v.LastAttemptAt,
+            attemptCount = v.AttemptCount,
+            maxAutoRedriveAttempts = v.MaxAutoRedriveAttempts,
+            status = v.Status,
+            nextAutoRedriveEligibleAt = v.NextAutoRedriveEligibleAt
+        })
+        .ToList();
+
+    return Results.Ok(new
+    {
+        count = views.Count,
+        totalUnknown = unknownSagas.Count,
+        maxAutoRedriveAttempts = Math.Max(1, opts.MaxReconcileUnknownRedriveAttempts),
+        items = views
+    });
+}).WithDebugOrServicePolicy(entraEnabled, app.Environment);
+
+app.MapPost("/ops/sagas/{sagaId:guid}/redrive-reconcile", async (
+    Guid sagaId,
+    HttpContext httpContext,
+    OrchestratorDbContext db,
+    IPublishEndpoint publish,
+    ILoggerFactory loggerFactory) =>
+{
+    var saga = await db.TicketSuggestionSagas
+        .FirstOrDefaultAsync(s => s.CorrelationId == sagaId);
+    if (saga is null)
+        return Results.NotFound();
+    if (!ReconcileUnknownRedrivePolicy.IsEligible(saga))
+        return Results.BadRequest(new
+        {
+            error = "Redrive is only allowed for sagas in ReconcileUnknown state.",
+            sagaState = saga.CurrentState
+        });
+
+    var callerIdentity = OpsCallerIdentity.Resolve(httpContext.User, app.Environment);
+    // Manual redrive intentionally does not increment auto-redrive attempt count so ops can recover
+    // exhausted sagas without being blocked by MaxReconcileUnknownRedriveAttempts.
+    var logger = loggerFactory.CreateLogger("OpsManualRedrive");
+    logger.LogWarning(
+        "Manual ReconcileUnknown redrive requested SagaId={SagaId} TicketId={TicketId} JobId={JobId} SagaState={SagaState} Caller={Caller}",
+        saga.CorrelationId,
+        saga.TicketId,
+        saga.JobId,
+        saga.CurrentState,
+        callerIdentity);
+
+    var telemetry = httpContext.RequestServices.TryGetTelemetryClient();
+    SagaReconcileTelemetry.TrackUnknownManualRedrive(telemetry, saga.CorrelationId, saga.TicketId, callerIdentity);
+
+    await publish.Publish<IReconcileRedrive>(new ReconcileRedrive(sagaId));
+    return Results.Ok(new
+    {
+        sagaId,
+        saga.TicketId,
+        jobId = saga.JobId,
+        status = MapSagaStatusForUi(saga.CurrentState),
+        sagaState = saga.CurrentState,
+        failureReason = saga.FailureReason,
+        redriveRequestedBy = callerIdentity
     });
 }).WithDebugOrServicePolicy(entraEnabled, app.Environment);
 

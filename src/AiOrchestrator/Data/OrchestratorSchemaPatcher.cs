@@ -9,6 +9,7 @@ internal static class OrchestratorSchemaPatcher
     {
         await PatchTicketSuggestionSagaAsync(db, cancellationToken);
         await PatchAiGenerationAttemptsAsync(db, cancellationToken);
+        await PatchSagaReconciliationItemsAsync(db, cancellationToken);
     }
 
     private static async Task PatchTicketSuggestionSagaAsync(OrchestratorDbContext db, CancellationToken cancellationToken)
@@ -22,8 +23,16 @@ internal static class OrchestratorSchemaPatcher
             return;
 
         var schema = entityType.GetSchema() ?? "dbo";
-        var sql = BuildAddColumnIfMissingSql(schema, table, "ProposeRetryCount", "int NOT NULL DEFAULT 0");
-        await db.Database.ExecuteSqlRawAsync(sql, cancellationToken);
+        var statements = new[]
+        {
+            BuildAddColumnIfMissingSql(schema, table, "ProposeRetryCount", "int NOT NULL DEFAULT 0"),
+            BuildAddColumnIfMissingSql(schema, table, "ReconcileTransientFailureCount", "int NOT NULL DEFAULT 0"),
+            BuildAddColumnIfMissingSql(schema, table, "LastReconcileAttemptAt", "datetimeoffset NULL"),
+            BuildAddColumnIfMissingSql(schema, table, "ReconcilingSinceAt", "datetimeoffset NULL")
+        };
+
+        foreach (var sql in statements)
+            await db.Database.ExecuteSqlRawAsync(sql, cancellationToken);
     }
 
     private static async Task PatchAiGenerationAttemptsAsync(OrchestratorDbContext db, CancellationToken cancellationToken)
@@ -50,6 +59,30 @@ internal static class OrchestratorSchemaPatcher
 
         foreach (var sql in statements)
             await db.Database.ExecuteSqlRawAsync(sql, cancellationToken);
+    }
+
+    private static async Task PatchSagaReconciliationItemsAsync(OrchestratorDbContext db, CancellationToken cancellationToken)
+    {
+        var qualifiedTable = "[dbo].[SagaReconciliationItems]";
+        var createSql = $"""
+            IF OBJECT_ID(N'dbo.SagaReconciliationItems', N'U') IS NULL
+            BEGIN
+                CREATE TABLE {qualifiedTable} (
+                    [SagaId] uniqueidentifier NOT NULL,
+                    [TicketId] nvarchar(32) NOT NULL,
+                    [JobId] uniqueidentifier NOT NULL,
+                    [Reason] nvarchar(2000) NOT NULL,
+                    [CreatedAt] datetimeoffset NOT NULL,
+                    [LastAttemptAt] datetimeoffset NULL,
+                    [AttemptCount] int NOT NULL DEFAULT 0,
+                    [ResolvedAt] datetimeoffset NULL,
+                    [Resolution] nvarchar(64) NULL,
+                    CONSTRAINT [PK_SagaReconciliationItems] PRIMARY KEY ([SagaId])
+                );
+                CREATE INDEX [IX_SagaReconciliationItems_ResolvedAt] ON {qualifiedTable} ([ResolvedAt]);
+            END
+            """;
+        await db.Database.ExecuteSqlRawAsync(createSql, cancellationToken);
     }
 
     internal static string BuildAddRowVersionColumnIfMissingSql(string schema, string table)

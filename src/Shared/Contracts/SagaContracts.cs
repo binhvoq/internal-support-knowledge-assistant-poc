@@ -40,6 +40,14 @@ public interface IAutoSuggestionDiscarded
     string Reason { get; }
 }
 
+/// <summary>Audit: reconcile transient failure keo dai — khong xac dinh duoc trang thai ticket.</summary>
+public interface IAutoSuggestionReconcileUnknown
+{
+    Guid JobId { get; }
+    string TicketId { get; }
+    string Reason { get; }
+}
+
 // =========================
 // Saga orchestration messages
 // =========================
@@ -95,6 +103,19 @@ public interface IReconcileAbandon
 {
     Guid SagaId { get; }
     string Reason { get; }
+}
+
+/// <summary>Sweeper leo thang saga Reconciling sau nhieu transient failure — chuyen sang ReconcileUnknown.</summary>
+public interface IReconcileEscalate
+{
+    Guid SagaId { get; }
+    string Reason { get; }
+}
+
+/// <summary>Redrive reconcile cho saga dang ReconcileUnknown — auto sweeper hoac ops thu cong.</summary>
+public interface IReconcileRedrive
+{
+    Guid SagaId { get; }
 }
 
 /// <summary>Sweeper phat hien saga ket o GeneratingSuggestion/ApplyingSuggestion qua lau.</summary>
@@ -167,6 +188,7 @@ public sealed record TicketCreated(
 public sealed record AiSuggestionGenerated(Guid JobId, string TicketId) : IAiSuggestionGenerated;
 public sealed record AutoSuggestionFailed(Guid JobId, string TicketId, string Reason) : IAutoSuggestionFailed;
 public sealed record AutoSuggestionDiscarded(Guid JobId, string TicketId, string Reason) : IAutoSuggestionDiscarded;
+public sealed record AutoSuggestionReconcileUnknown(Guid JobId, string TicketId, string Reason) : IAutoSuggestionReconcileUnknown;
 
 public sealed record GenerateSuggestionRequested(
     Guid SagaId,
@@ -195,6 +217,8 @@ public sealed record SuggestionGenerationFailed(
 public sealed record StepTimeout(Guid SagaId, Guid AttemptId) : IStepTimeout;
 public sealed record ReconcileSweep(Guid SagaId) : IReconcileSweep;
 public sealed record ReconcileAbandon(Guid SagaId, string Reason) : IReconcileAbandon;
+public sealed record ReconcileEscalate(Guid SagaId, string Reason) : IReconcileEscalate;
+public sealed record ReconcileRedrive(Guid SagaId) : IReconcileRedrive;
 public sealed record StuckStepSweep(Guid SagaId) : IStuckStepSweep;
 
 public sealed record ProposeTicketSuggestion(

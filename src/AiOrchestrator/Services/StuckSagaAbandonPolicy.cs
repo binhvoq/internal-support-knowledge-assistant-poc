@@ -1,3 +1,5 @@
+using SupportPoc.AiOrchestrator.Options;
+using SupportPoc.AiOrchestrator.Saga;
 using SupportPoc.Shared.Models;
 
 namespace SupportPoc.AiOrchestrator.Services;
@@ -7,13 +9,23 @@ internal static class StuckSagaAbandonPolicy
     internal enum ResolvedAction
     {
         ReconcileSweep,
-        Abandon
+        Abandon,
+        EscalateUnknown
     }
 
-    internal static ResolvedAction Decide(AutoSuggestionReconcileResult? reconcile, Exception? reconcileError)
+    internal static ResolvedAction Decide(
+        AutoSuggestionReconcileResult? reconcile,
+        Exception? reconcileError,
+        TicketSuggestionSaga saga,
+        AutoSuggestionOptions options,
+        DateTimeOffset now)
     {
         if (reconcileError is not null)
-            return ResolvedAction.Abandon;
+        {
+            return ReconcileTransientTracker.ShouldEscalate(saga, options, now)
+                ? ResolvedAction.EscalateUnknown
+                : ResolvedAction.ReconcileSweep;
+        }
 
         if (reconcile is null)
             return ResolvedAction.Abandon;

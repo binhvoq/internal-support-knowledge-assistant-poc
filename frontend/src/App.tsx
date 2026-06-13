@@ -22,6 +22,8 @@ function autoSuggestionStatusText(status: string | null): string {
       return 'Tao goi y that bai — agent co the xu ly thu cong.';
     case 'Discarded':
       return 'Goi y khong duoc ap dung (ticket da thay doi hoac da resolve).';
+    case 'Unknown':
+      return 'Khong xac dinh duoc trang thai goi y tu dong. He thong se thu doi soat lai hoac can support kiem tra.';
     default:
       return 'Chua co goi y so bo.';
   }

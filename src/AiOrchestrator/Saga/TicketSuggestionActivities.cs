@@ -2,6 +2,7 @@ using System.Text.Json;
 using MassTransit;
 using Microsoft.Extensions.Logging;
 using SupportPoc.AiOrchestrator.Options;
+using SupportPoc.AiOrchestrator.Services;
 using SupportPoc.Shared.Contracts;
 using SupportPoc.Shared.Models;
 
@@ -189,5 +190,11 @@ internal static class TicketSuggestionActivities
         context.GetServiceOrCreateInstance<ILogger<TicketSuggestionStateMachine>>()
             .LogInformation("{Audit}", audit);
     }
+
+    internal static void BeginReconciling(TicketSuggestionSaga saga) =>
+        ReconcileTransientTracker.BeginReconciling(saga, DateTimeOffset.UtcNow);
+
+    internal static void BeginReconciling(BehaviorContext<TicketSuggestionSaga> context) =>
+        BeginReconciling(context.Saga);
 
 }

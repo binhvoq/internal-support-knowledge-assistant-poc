@@ -2,7 +2,9 @@ using MassTransit;
 using Microsoft.Extensions.Options;
 using SupportPoc.AiOrchestrator.Data;
 using SupportPoc.AiOrchestrator.Options;
+using SupportPoc.AiOrchestrator.Services;
 using SupportPoc.Shared.Contracts;
+using SupportPoc.Shared.Telemetry;
 
 namespace SupportPoc.AiOrchestrator.Saga;
 
@@ -13,6 +15,7 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
     public State GeneratingSuggestion { get; private set; } = null!;
     public State ApplyingSuggestion { get; private set; } = null!;
     public State Reconciling { get; private set; } = null!;
+    public State ReconcileUnknown { get; private set; } = null!;
     public State Completed { get; private set; } = null!;
     public State Discarded { get; private set; } = null!;
     public State Failed { get; private set; } = null!;
@@ -22,6 +25,8 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
     public Event<ISuggestionGenerationFailed> SuggestionGenerationFailed { get; private set; } = null!;
     public Event<IReconcileSweep> ReconcileSweep { get; private set; } = null!;
     public Event<IReconcileAbandon> ReconcileAbandon { get; private set; } = null!;
+    public Event<IReconcileEscalate> ReconcileEscalate { get; private set; } = null!;
+    public Event<IReconcileRedrive> ReconcileRedrive { get; private set; } = null!;
     public Event<IStuckStepSweep> StuckStepSweep { get; private set; } = null!;
 
     public Schedule<TicketSuggestionSaga, IStepTimeout> StepTimeoutSchedule { get; private set; } = null!;
@@ -51,6 +56,8 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
         });
         Event(() => ReconcileSweep, e => e.CorrelateById(m => m.Message.SagaId));
         Event(() => ReconcileAbandon, e => e.CorrelateById(m => m.Message.SagaId));
+        Event(() => ReconcileEscalate, e => e.CorrelateById(m => m.Message.SagaId));
+        Event(() => ReconcileRedrive, e => e.CorrelateById(m => m.Message.SagaId));
         Event(() => StuckStepSweep, e => e.CorrelateById(m => m.Message.SagaId));
 
         Schedule(() => StepTimeoutSchedule, x => x.StepTimeoutTokenId, s =>
@@ -89,17 +96,20 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                 .If(ctx => ctx.Message.AttemptId == ctx.Saga.CurrentAttemptId, then => AfterReconcile(
                     then.Unschedule(StepTimeoutSchedule)
                         .TransitionTo(Reconciling)
+                        .Then(TicketSuggestionActivities.BeginReconciling)
                         .Activity(x => x.OfInstanceType<ReconcileTicketSuggestionActivity>()))),
 
             When(StepTimeoutSchedule.Received)
                 .If(ctx => ctx.Message.AttemptId == ctx.Saga.CurrentAttemptId, then => AfterReconcile(
                     then.TransitionTo(Reconciling)
+                        .Then(TicketSuggestionActivities.BeginReconciling)
                         .Activity(x => x.OfInstanceType<ReconcileTicketSuggestionActivity>()))),
 
             AfterReconcile(
                 When(StuckStepSweep)
                     .Unschedule(StepTimeoutSchedule)
                     .TransitionTo(Reconciling)
+                    .Then(TicketSuggestionActivities.BeginReconciling)
                     .Activity(x => x.OfInstanceType<ReconcileTicketSuggestionActivity>())));
 
         During(ApplyingSuggestion,
@@ -125,23 +135,27 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                 .Unschedule(StepTimeoutSchedule)
                 .If(_ => true, then => AfterReconcile(
                     then.TransitionTo(Reconciling)
+                        .Then(TicketSuggestionActivities.BeginReconciling)
                         .Activity(x => x.OfInstanceType<ReconcileTicketSuggestionActivity>()))),
 
             When(ProposeSuggestion.TimeoutExpired)
                 .Unschedule(StepTimeoutSchedule)
                 .If(_ => true, then => AfterReconcile(
                     then.TransitionTo(Reconciling)
+                        .Then(TicketSuggestionActivities.BeginReconciling)
                         .Activity(x => x.OfInstanceType<ReconcileTicketSuggestionActivity>()))),
 
             When(StepTimeoutSchedule.Received)
                 .If(ctx => ctx.Message.AttemptId == ctx.Saga.CurrentAttemptId, then => AfterReconcile(
                     then.TransitionTo(Reconciling)
+                        .Then(TicketSuggestionActivities.BeginReconciling)
                         .Activity(x => x.OfInstanceType<ReconcileTicketSuggestionActivity>()))),
 
             AfterReconcile(
                 When(StuckStepSweep)
                     .Unschedule(StepTimeoutSchedule)
                     .TransitionTo(Reconciling)
+                    .Then(TicketSuggestionActivities.BeginReconciling)
                     .Activity(x => x.OfInstanceType<ReconcileTicketSuggestionActivity>())),
 
             Ignore(SuggestionGenerated));
@@ -177,7 +191,39 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                     ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
                 })
                 .Publish(ctx => new AutoSuggestionFailed(ctx.Saga.JobId, ctx.Saga.TicketId, ctx.Saga.FailureReason ?? "Abandoned"))
-                .TransitionTo(Failed));
+                .TransitionTo(Failed),
+            When(ReconcileEscalate)
+                .ThenAsync(async ctx =>
+                {
+                    ctx.Saga.FailureReason = ctx.Message.Reason;
+                    ctx.Saga.UpdatedAt = DateTimeOffset.UtcNow;
+                    var queue = ctx.GetServiceOrCreateInstance<ISagaReconciliationQueue>();
+                    await queue.UpsertOnEscalateAsync(ctx.Saga, ctx.Message.Reason, ctx.CancellationToken);
+                    SagaReconcileTelemetry.TrackEscalatedToUnknown(
+                        ctx.GetServiceOrCreateInstance<IServiceProvider>().TryGetTelemetryClient(),
+                        ctx.Saga.CorrelationId,
+                        ctx.Saga.TicketId,
+                        ctx.Message.Reason);
+                })
+                .Publish(ctx => new AutoSuggestionReconcileUnknown(
+                    ctx.Saga.JobId,
+                    ctx.Saga.TicketId,
+                    ctx.Saga.FailureReason ?? "Reconcile unknown"))
+                .TransitionTo(ReconcileUnknown));
+
+        During(ReconcileUnknown,
+            Ignore(TicketCreated),
+            Ignore(ProposeSuggestion.Completed),
+            Ignore(ProposeSuggestion.Faulted),
+            Ignore(ProposeSuggestion.TimeoutExpired),
+            Ignore(ReconcileSweep),
+            Ignore(ReconcileAbandon),
+            Ignore(ReconcileEscalate),
+            AfterReconcile(
+                When(ReconcileRedrive)
+                    .Activity(x => x.OfInstanceType<ReconcileUnknownRedriveActivity>())),
+            When(SuggestionGenerated)
+                .Then(TicketSuggestionActivities.AuditLateMessageIgnored));
 
         During(Completed,
             Ignore(TicketCreated),

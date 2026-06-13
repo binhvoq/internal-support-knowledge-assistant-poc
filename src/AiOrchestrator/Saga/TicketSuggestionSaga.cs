@@ -31,6 +31,10 @@ public sealed class TicketSuggestionSaga : SagaStateMachineInstance
     public string? LateMessageAudit { get; set; }
     public string? PendingReconcileAction { get; set; }
 
+    public int ReconcileTransientFailureCount { get; set; }
+    public DateTimeOffset? LastReconcileAttemptAt { get; set; }
+    public DateTimeOffset? ReconcilingSinceAt { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 }
