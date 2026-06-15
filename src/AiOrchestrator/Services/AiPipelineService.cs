@@ -99,11 +99,15 @@ public sealed class AiPipelineService : IAiPipelineService
     {
         try
         {
-            return await _knowledge.SearchAsync(query, category, cancellationToken);
+            var results = await _knowledge.SearchAsync(query, category, cancellationToken);
+            return results;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "KnowledgeService search that bai.");
+            _logger.LogWarning(
+                ex,
+                "KnowledgeService search that bai cho query {QueryPreview} — pipeline tiep tuc voi context rong.",
+                query.Length <= 80 ? query : query[..80] + "...");
             return [];
         }
     }

@@ -22,9 +22,8 @@ public static class EntraOutboundReadinessPolicy
         if (string.IsNullOrWhiteSpace(secret))
             return new Result(false, "Thieu AzureAd.McpClientSecret — HTTP outbound se bi 401.");
 
-        var audience = string.IsNullOrWhiteSpace(options.Audience) ? options.ClientId : options.Audience;
-        if (string.IsNullOrWhiteSpace(audience))
-            return new Result(false, "Thieu AzureAd.Audience — client credentials khong lay duoc token.");
+        if (string.IsNullOrWhiteSpace(options.Audience))
+            return new Result(false, "Thieu AzureAd.Audience — dat App ID URI cua API dich (vi du api://<app-id>).");
 
         return new Result(true, "Entra outbound credentials configured.");
     }

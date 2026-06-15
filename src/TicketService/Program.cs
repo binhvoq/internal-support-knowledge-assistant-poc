@@ -8,12 +8,14 @@ using SupportPoc.Shared.Contracts;
 using SupportPoc.Shared.Data;
 using SupportPoc.Shared.Messaging;
 using SupportPoc.Shared.Models;
+using SupportPoc.Shared.Telemetry;
 using SupportPoc.TicketService.Consumers;
 using SupportPoc.TicketService.Data;
 using SupportPoc.TicketService.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 ProductionSecurityGuard.Validate(builder.Environment, builder.Configuration);
+builder.Services.AddSupportPocApplicationInsights(builder.Configuration);
 
 var entraEnabled = builder.Configuration.IsEntraEnabled();
 if (entraEnabled)

@@ -39,10 +39,10 @@ public sealed class ClientCredentialsTokenProvider
             if (_cachedToken is not null && _expiresAt > DateTimeOffset.UtcNow.AddMinutes(2))
                 return _cachedToken;
 
-            var audience = string.IsNullOrWhiteSpace(_options.Audience)
-                ? $"api://{clientId}"
-                : _options.Audience;
-            var scope = $"{audience}/.default";
+            if (string.IsNullOrWhiteSpace(_options.Audience))
+                return null;
+
+            var scope = $"{_options.Audience.TrimEnd('/')}/.default";
             var tokenUrl = $"{_options.Instance.TrimEnd('/')}/{_options.TenantId}/oauth2/v2.0/token";
 
             using var http = _httpClientFactory.CreateClient();

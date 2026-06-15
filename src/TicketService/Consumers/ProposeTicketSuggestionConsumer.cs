@@ -42,5 +42,14 @@ public sealed class ProposeTicketSuggestionConsumerDefinition : ConsumerDefiniti
     {
         endpointConfigurator.UseMessageRetry(r => r.Intervals(100, 500, 1000, 2000));
         // Consumer outbox: Program.cs AddEntityFrameworkConsumerOutbox<TicketDbContext>()
+
+        if (endpointConfigurator is IServiceBusReceiveEndpointConfigurator sb)
+        {
+            sb.LockDuration = TimeSpan.FromMinutes(5);
+            sb.MaxAutoRenewDuration = TimeSpan.FromMinutes(15);
+            sb.MaxDeliveryCount = 5;
+            sb.ConfigureDeadLetterQueueErrorTransport();
+            sb.ConfigureDeadLetterQueueDeadLetterTransport();
+        }
     }
 }

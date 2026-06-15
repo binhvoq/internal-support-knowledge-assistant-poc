@@ -4,7 +4,8 @@ public sealed class AutoSuggestionOptions
 {
     public const string SectionName = "AutoSuggestion";
 
-    public int StepTimeoutSeconds { get; set; } = 120;
+    /// <summary>Timeout saga cho moi buoc (Generating/Applying). Phai >= AiGenerationLeaseSeconds.</summary>
+    public int StepTimeoutSeconds { get; set; } = 360;
     public int ProposeRequestTimeoutSeconds { get; set; } = 30;
     public int MaxGenerationRetries { get; set; } = 3;
     public int MaxProposeRetries { get; set; } = 3;
