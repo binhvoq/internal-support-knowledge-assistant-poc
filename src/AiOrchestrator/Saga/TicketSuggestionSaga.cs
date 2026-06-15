@@ -15,11 +15,13 @@ public sealed class TicketSuggestionSaga : SagaStateMachineInstance
 
     public Guid JobId { get; set; }
     public Guid CurrentAttemptId { get; set; }
+    public DateTimeOffset CurrentAttemptIssuedAt { get; set; }
     public int RetryCount { get; set; }
     public int ProposeRetryCount { get; set; }
 
     public long? TicketVersionAtStart { get; set; }
     public Guid? StepTimeoutTokenId { get; set; }
+    public Guid? GenerationCheckTokenId { get; set; }
     public Guid? LastProposeCommandId { get; set; }
 
     public string? GeneratedCategory { get; set; }

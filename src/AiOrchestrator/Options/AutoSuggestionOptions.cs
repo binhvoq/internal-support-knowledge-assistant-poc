@@ -60,4 +60,13 @@ public sealed class AutoSuggestionOptions
 
     /// <summary>Lease khi worker claim attempt (giay) — phai du lon cho HTTP/LLM.</summary>
     public int AiGenerationLeaseSeconds { get; set; } = 300;
+
+    /// <summary>Budget toi da cho mot attempt (giay) — ke ca khi worker renew lease lien tuc.</summary>
+    public int AiGenerationHardTimeoutSeconds { get; set; } = 1800;
+
+    /// <summary>Chu ky poll attempt khi saga cho generation active (giay).</summary>
+    public int GenerationCheckIntervalSeconds { get; set; } = 30;
+
+    /// <summary>Cho phep consumer tao row attempt sau khi saga gui generation request (giay).</summary>
+    public int MissingAttemptGraceSeconds { get; set; } = 60;
 }

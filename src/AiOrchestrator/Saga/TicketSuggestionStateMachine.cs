@@ -30,6 +30,7 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
     public Event<IStuckStepSweep> StuckStepSweep { get; private set; } = null!;
 
     public Schedule<TicketSuggestionSaga, IStepTimeout> StepTimeoutSchedule { get; private set; } = null!;
+    public Schedule<TicketSuggestionSaga, IGenerationCheck> GenerationCheckSchedule { get; private set; } = null!;
 
     public Request<TicketSuggestionSaga, IProposeTicketSuggestion, IProposeTicketSuggestionResult> ProposeSuggestion { get; private set; } = null!;
 
@@ -37,6 +38,7 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
     {
         var opts = options.Value;
         var stepTimeout = TimeSpan.FromSeconds(Math.Max(5, opts.StepTimeoutSeconds));
+        var generationCheckInterval = TimeSpan.FromSeconds(Math.Max(5, opts.GenerationCheckIntervalSeconds));
         var proposeTimeout = TimeSpan.FromSeconds(Math.Max(5, opts.ProposeRequestTimeoutSeconds));
 
         InstanceState(x => x.CurrentState);
@@ -66,6 +68,12 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
             s.Received = r => r.CorrelateById(m => m.Message.SagaId);
         });
 
+        Schedule(() => GenerationCheckSchedule, x => x.GenerationCheckTokenId, s =>
+        {
+            s.Delay = generationCheckInterval;
+            s.Received = r => r.CorrelateById(m => m.Message.SagaId);
+        });
+
         Request(() => ProposeSuggestion, r =>
         {
             r.ServiceAddress = new Uri("queue:propose-ticket-suggestion");
@@ -86,6 +94,7 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                 .If(ctx => ctx.Message.AttemptId == ctx.Saga.CurrentAttemptId, then => then
                     .Then(TicketSuggestionActivities.StoreGeneratedResult)
                     .Unschedule(StepTimeoutSchedule)
+                    .Unschedule(GenerationCheckSchedule)
                     .Request(ProposeSuggestion, ctx => TicketSuggestionActivities.CreateProposeRequest(ctx))
                     .Schedule(StepTimeoutSchedule, ctx => TicketSuggestionActivities.CreateStepTimeout(ctx))
                     .TransitionTo(ApplyingSuggestion))
@@ -95,6 +104,7 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
             When(SuggestionGenerationFailed)
                 .If(ctx => ctx.Message.AttemptId == ctx.Saga.CurrentAttemptId, then => AfterReconcile(
                     then.Unschedule(StepTimeoutSchedule)
+                        .Unschedule(GenerationCheckSchedule)
                         .TransitionTo(Reconciling)
                         .Then(TicketSuggestionActivities.BeginReconciling)
                         .Activity(x => x.OfInstanceType<ReconcileTicketSuggestionActivity>()))),
@@ -105,9 +115,17 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                         .Then(TicketSuggestionActivities.BeginReconciling)
                         .Activity(x => x.OfInstanceType<ReconcileTicketSuggestionActivity>()))),
 
+            When(GenerationCheckSchedule.Received)
+                .If(ctx => ctx.Message.AttemptId == ctx.Saga.CurrentAttemptId, then => AfterReconcile(
+                    then.Unschedule(GenerationCheckSchedule)
+                        .TransitionTo(Reconciling)
+                        .Then(TicketSuggestionActivities.BeginReconciling)
+                        .Activity(x => x.OfInstanceType<ReconcileTicketSuggestionActivity>()))),
+
             AfterReconcile(
                 When(StuckStepSweep)
                     .Unschedule(StepTimeoutSchedule)
+                    .Unschedule(GenerationCheckSchedule)
                     .TransitionTo(Reconciling)
                     .Then(TicketSuggestionActivities.BeginReconciling)
                     .Activity(x => x.OfInstanceType<ReconcileTicketSuggestionActivity>())));
@@ -162,9 +180,21 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
 
         During(Reconciling,
             Ignore(TicketCreated),
-            Ignore(SuggestionGenerated),
-            Ignore(SuggestionGenerationFailed),
+            When(SuggestionGenerated)
+                .If(ctx => ctx.Message.AttemptId == ctx.Saga.CurrentAttemptId, then => then
+                    .Then(TicketSuggestionActivities.StoreGeneratedResult)
+                    .Unschedule(StepTimeoutSchedule)
+                    .Unschedule(GenerationCheckSchedule)
+                    .Request(ProposeSuggestion, ctx => TicketSuggestionActivities.CreateProposeRequest(ctx))
+                    .Schedule(StepTimeoutSchedule, ctx => TicketSuggestionActivities.CreateStepTimeout(ctx))
+                    .TransitionTo(ApplyingSuggestion))
+                .If(ctx => ctx.Message.AttemptId != ctx.Saga.CurrentAttemptId, then => then
+                    .Then(TicketSuggestionActivities.AuditLateAttempt)),
+            When(SuggestionGenerationFailed)
+                .If(ctx => ctx.Message.AttemptId == ctx.Saga.CurrentAttemptId, then => AfterReconcile(
+                    then.Activity(x => x.OfInstanceType<ReconcileTicketSuggestionActivity>()))),
             Ignore(StepTimeoutSchedule.Received),
+            Ignore(GenerationCheckSchedule.Received),
             When(ProposeSuggestion.Completed)
                 .Unschedule(StepTimeoutSchedule)
                 .If(ctx => ctx.Message.Accepted, accepted => accepted
@@ -269,12 +299,22 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
                     ctx.Saga.DiscardReason ?? "Discarded"))
                 .TransitionTo(Discarded))
             .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Propose, propose => propose
+                .Unschedule(GenerationCheckSchedule)
                 .Request(ProposeSuggestion, ctx => TicketSuggestionActivities.CreateProposeRequest(ctx))
                 .Schedule(StepTimeoutSchedule, ctx => TicketSuggestionActivities.CreateStepTimeout(ctx))
                 .TransitionTo(ApplyingSuggestion))
             .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Retry, retry => retry
-                .Send(GenerateSuggestionEndpoint, ctx => TicketSuggestionActivities.CreateGenerateRequest(ctx))
-                .Schedule(StepTimeoutSchedule, ctx => TicketSuggestionActivities.CreateStepTimeout(ctx))
+                .Unschedule(GenerationCheckSchedule)
+                .Activity(x => x.OfInstanceType<PrepareGenerationRetryActivity>())
+                .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Retry, prepared => prepared
+                    .Send(GenerateSuggestionEndpoint, ctx => TicketSuggestionActivities.CreateGenerateRequest(ctx))
+                    .Schedule(StepTimeoutSchedule, ctx => TicketSuggestionActivities.CreateStepTimeout(ctx))
+                    .TransitionTo(GeneratingSuggestion))
+                .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.WaitForGeneration, deferred => deferred
+                    .Schedule(GenerationCheckSchedule, ctx => TicketSuggestionActivities.CreateGenerationCheck(ctx))
+                    .TransitionTo(GeneratingSuggestion)))
+            .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.WaitForGeneration, wait => wait
+                .Schedule(GenerationCheckSchedule, ctx => TicketSuggestionActivities.CreateGenerationCheck(ctx))
                 .TransitionTo(GeneratingSuggestion))
             .If(ctx => ctx.Saga.PendingReconcileAction == ReconcileActions.Fail, fail => fail
                 .Publish(ctx => new AutoSuggestionFailed(ctx.Saga.JobId, ctx.Saga.TicketId, ctx.Saga.FailureReason ?? "Failed"))

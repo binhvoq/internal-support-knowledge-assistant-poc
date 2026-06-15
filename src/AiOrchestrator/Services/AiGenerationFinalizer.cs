@@ -200,7 +200,7 @@ public sealed class AiGenerationFinalizer
     }
 
     private static bool IsTerminal(string status) =>
-        status is AiGenerationAttemptStatus.Completed or AiGenerationAttemptStatus.Failed;
+        AiGenerationAttemptStatuses.IsTerminal(status);
 
     private static bool OwnsLease(AiGenerationAttemptEntity attempt, string leaseOwner) =>
         attempt.Status == AiGenerationAttemptStatus.Running

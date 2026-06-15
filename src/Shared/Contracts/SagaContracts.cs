@@ -92,6 +92,13 @@ public interface IStepTimeout
     Guid AttemptId { get; }
 }
 
+/// <summary>Scheduled generation check — soft poll khi attempt con active, khong tao attempt moi.</summary>
+public interface IGenerationCheck
+{
+    Guid SagaId { get; }
+    Guid AttemptId { get; }
+}
+
 /// <summary>Background sweeper yeu cau saga dang Reconciling chay lai domain reconcile.</summary>
 public interface IReconcileSweep
 {
@@ -215,6 +222,7 @@ public sealed record SuggestionGenerationFailed(
     string Reason) : ISuggestionGenerationFailed;
 
 public sealed record StepTimeout(Guid SagaId, Guid AttemptId) : IStepTimeout;
+public sealed record GenerationCheck(Guid SagaId, Guid AttemptId) : IGenerationCheck;
 public sealed record ReconcileSweep(Guid SagaId) : IReconcileSweep;
 public sealed record ReconcileAbandon(Guid SagaId, string Reason) : IReconcileAbandon;
 public sealed record ReconcileEscalate(Guid SagaId, string Reason) : IReconcileEscalate;

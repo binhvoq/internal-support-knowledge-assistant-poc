@@ -28,7 +28,9 @@ internal static class OrchestratorSchemaPatcher
             BuildAddColumnIfMissingSql(schema, table, "ProposeRetryCount", "int NOT NULL DEFAULT 0"),
             BuildAddColumnIfMissingSql(schema, table, "ReconcileTransientFailureCount", "int NOT NULL DEFAULT 0"),
             BuildAddColumnIfMissingSql(schema, table, "LastReconcileAttemptAt", "datetimeoffset NULL"),
-            BuildAddColumnIfMissingSql(schema, table, "ReconcilingSinceAt", "datetimeoffset NULL")
+            BuildAddColumnIfMissingSql(schema, table, "ReconcilingSinceAt", "datetimeoffset NULL"),
+            BuildAddColumnIfMissingSql(schema, table, "GenerationCheckTokenId", "uniqueidentifier NULL"),
+            BuildAddColumnIfMissingSql(schema, table, "CurrentAttemptIssuedAt", "datetimeoffset NOT NULL DEFAULT SYSDATETIMEOFFSET()")
         };
 
         foreach (var sql in statements)
@@ -59,6 +61,31 @@ internal static class OrchestratorSchemaPatcher
 
         foreach (var sql in statements)
             await db.Database.ExecuteSqlRawAsync(sql, cancellationToken);
+
+        await EnsureActiveAttemptUniqueIndexAsync(db, schema, table, cancellationToken);
+    }
+
+    private static async Task EnsureActiveAttemptUniqueIndexAsync(
+        OrchestratorDbContext db,
+        string schema,
+        string table,
+        CancellationToken cancellationToken)
+    {
+        var qualifiedTable = $"[{schema}].[{table}]";
+        var sql = $"""
+            IF OBJECT_ID(N'{schema}.{table}', N'U') IS NOT NULL
+            AND NOT EXISTS (
+                SELECT 1
+                FROM sys.indexes
+                WHERE name = N'UX_AiGenerationAttempts_JobId_Active'
+                  AND object_id = OBJECT_ID(N'{schema}.{table}'))
+            BEGIN
+                CREATE UNIQUE NONCLUSTERED INDEX [UX_AiGenerationAttempts_JobId_Active]
+                ON {qualifiedTable} ([JobId])
+                WHERE [Status] IN (N'Pending', N'Running');
+            END
+            """;
+        await db.Database.ExecuteSqlRawAsync(sql, cancellationToken);
     }
 
     private static async Task PatchSagaReconciliationItemsAsync(OrchestratorDbContext db, CancellationToken cancellationToken)

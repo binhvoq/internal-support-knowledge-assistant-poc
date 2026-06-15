@@ -13,6 +13,7 @@ namespace SupportPoc.AiOrchestrator.Saga;
 /// </summary>
 public sealed class ReconcileUnknownRedriveActivity(
     ITicketSuggestionReconcileClient reconcileClient,
+    IAiGenerationAttemptReader attemptReader,
     IOptions<AutoSuggestionOptions> options,
     ILogger<TicketSuggestionStateMachine> logger,
     IServiceProvider serviceProvider,
@@ -61,6 +62,7 @@ public sealed class ReconcileUnknownRedriveActivity(
                 saga,
                 options.Value,
                 reconcileClient,
+                attemptReader,
                 context.CancellationToken);
 
             ReconcileTransientTracker.RecordSuccess(saga, now);

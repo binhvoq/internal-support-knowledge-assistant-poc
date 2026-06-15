@@ -10,6 +10,7 @@ namespace SupportPoc.AiOrchestrator.Saga;
 
 public sealed class ReconcileTicketSuggestionActivity(
     ITicketSuggestionReconcileClient reconcileClient,
+    IAiGenerationAttemptReader attemptReader,
     IOptions<AutoSuggestionOptions> options,
     ILogger<TicketSuggestionStateMachine> logger,
     IServiceProvider serviceProvider,
@@ -59,6 +60,7 @@ public sealed class ReconcileTicketSuggestionActivity(
             saga,
             options.Value,
             reconcileClient,
+            attemptReader,
             context.CancellationToken);
 
         ReconcileTransientTracker.RecordSuccess(saga, now);
@@ -104,6 +106,7 @@ public sealed class ReconcileTicketSuggestionActivity(
         TicketSuggestionSaga saga,
         AutoSuggestionOptions options,
         ITicketSuggestionReconcileClient reconcileClient,
+        IAiGenerationAttemptReader attemptReader,
         CancellationToken cancellationToken)
     {
         var reconcile = await reconcileClient.ReconcileAsync(
@@ -112,7 +115,11 @@ public sealed class ReconcileTicketSuggestionActivity(
             saga.TicketVersionAtStart,
             cancellationToken);
 
-        return (ReconcilePlanner.Decide(saga, options, reconcile), reconcile);
+        var attempt = saga.CurrentAttemptId != Guid.Empty
+            ? await attemptReader.GetByAttemptIdAsync(saga.CurrentAttemptId, cancellationToken)
+            : null;
+
+        return (ReconcilePlanner.Decide(saga, options, reconcile, attempt), reconcile);
     }
 
     internal static void ApplyOutcome(BehaviorContext<TicketSuggestionSaga> context, ReconcilePlanner.Outcome outcome)
@@ -122,11 +129,8 @@ public sealed class ReconcileTicketSuggestionActivity(
         if (outcome.IncrementProposeRetry)
             saga.ProposeRetryCount++;
 
-        if (outcome.StartNewGenerationAttempt)
-        {
-            saga.RetryCount++;
-            TicketSuggestionActivities.StartNewAttempt(context);
-        }
+        if (outcome.HydrateFromAttempt is not null)
+            TicketSuggestionActivities.HydrateFromAttempt(saga, outcome.HydrateFromAttempt);
 
         if (outcome.DiscardReason is not null)
             saga.DiscardReason = outcome.DiscardReason;

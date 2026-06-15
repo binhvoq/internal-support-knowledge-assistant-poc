@@ -1,6 +1,7 @@
 using System.Text.Json;
 using MassTransit;
 using Microsoft.Extensions.Logging;
+using SupportPoc.AiOrchestrator.Data;
 using SupportPoc.AiOrchestrator.Options;
 using SupportPoc.AiOrchestrator.Services;
 using SupportPoc.Shared.Contracts;
@@ -15,6 +16,7 @@ internal static class ReconcileActions
     public const string Complete = "complete";
     public const string Discard = "discard";
     public const string Fail = "fail";
+    public const string WaitForGeneration = "wait-for-generation";
 }
 
 internal static class ReconcilePlanner
@@ -23,19 +25,22 @@ internal static class ReconcilePlanner
         string Action,
         string? FailureReason = null,
         string? DiscardReason = null,
-        bool StartNewGenerationAttempt = false,
-        bool IncrementProposeRetry = false);
+        bool RequiresGenerationRetry = false,
+        bool IncrementProposeRetry = false,
+        AiGenerationAttemptSnapshot? HydrateFromAttempt = null);
 
     internal static Outcome Decide(
         TicketSuggestionSaga saga,
         AutoSuggestionOptions options,
-        AutoSuggestionReconcileResult reconcile) =>
+        AutoSuggestionReconcileResult reconcile,
+        AiGenerationAttemptSnapshot? attempt = null,
+        DateTimeOffset? now = null) =>
         reconcile.Decision switch
         {
             AutoSuggestionReconcileDecision.AlreadyAppliedBySameJob =>
                 new Outcome(ReconcileActions.Complete),
             AutoSuggestionReconcileDecision.StillSuggestible =>
-                DecideStillSuggestible(saga, options),
+                DecideStillSuggestible(saga, options, attempt, now ?? DateTimeOffset.UtcNow),
             AutoSuggestionReconcileDecision.Resolved
             or AutoSuggestionReconcileDecision.AlreadySuggestedByOtherJob
             or AutoSuggestionReconcileDecision.VersionChanged =>
@@ -47,7 +52,11 @@ internal static class ReconcilePlanner
                 reconcile.Reason ?? $"Unexpected reconcile decision: {reconcile.Decision}")
         };
 
-    private static Outcome DecideStillSuggestible(TicketSuggestionSaga saga, AutoSuggestionOptions options)
+    private static Outcome DecideStillSuggestible(
+        TicketSuggestionSaga saga,
+        AutoSuggestionOptions options,
+        AiGenerationAttemptSnapshot? attempt,
+        DateTimeOffset now)
     {
         if (!string.IsNullOrWhiteSpace(saga.GeneratedSuggestion))
         {
@@ -59,12 +68,66 @@ internal static class ReconcilePlanner
             return new Outcome(ReconcileActions.Propose, IncrementProposeRetry: true);
         }
 
-        if (saga.RetryCount < options.MaxGenerationRetries)
+        var attemptOutcome = GenerationAttemptReconcileEvaluator.Evaluate(saga, options, attempt, now);
+        return attemptOutcome ?? new Outcome(ReconcileActions.Fail, "Generation timed out after retries.");
+    }
+}
+
+internal static class GenerationAttemptReconcileEvaluator
+{
+    internal static ReconcilePlanner.Outcome? Evaluate(
+        TicketSuggestionSaga saga,
+        AutoSuggestionOptions options,
+        AiGenerationAttemptSnapshot? attempt,
+        DateTimeOffset now)
+    {
+        if (attempt is null)
         {
-            return new Outcome(ReconcileActions.Retry, StartNewGenerationAttempt: true);
+            var grace = TimeSpan.FromSeconds(Math.Max(5, options.MissingAttemptGraceSeconds));
+            if (now - saga.CurrentAttemptIssuedAt <= grace)
+                return new ReconcilePlanner.Outcome(ReconcileActions.WaitForGeneration);
+
+            return DecideRetryOrFail(saga, options, "Generation request never enqueued.");
         }
 
-        return new Outcome(ReconcileActions.Fail, "Generation timed out after retries.");
+        return attempt.Status switch
+        {
+            AiGenerationAttemptStatus.Pending =>
+                new ReconcilePlanner.Outcome(ReconcileActions.WaitForGeneration),
+            AiGenerationAttemptStatus.Running when IsHardTimeoutExceeded(attempt, options, now) =>
+                DecideRetryOrFail(saga, options, "AI generation exceeded hard timeout."),
+            AiGenerationAttemptStatus.Running when attempt.LeaseUntil is not null && attempt.LeaseUntil > now =>
+                new ReconcilePlanner.Outcome(ReconcileActions.WaitForGeneration),
+            AiGenerationAttemptStatus.Running =>
+                DecideRetryOrFail(saga, options, "AI generation lease expired."),
+            AiGenerationAttemptStatus.Completed =>
+                new ReconcilePlanner.Outcome(ReconcileActions.Propose, HydrateFromAttempt: attempt),
+            AiGenerationAttemptStatus.Failed =>
+                DecideRetryOrFail(saga, options, attempt.Error ?? "AI generation failed."),
+            AiGenerationAttemptStatus.Superseded =>
+                DecideRetryOrFail(saga, options, attempt.Error ?? "AI generation superseded."),
+            _ => DecideRetryOrFail(saga, options, $"Unexpected attempt status: {attempt.Status}")
+        };
+    }
+
+    private static bool IsHardTimeoutExceeded(
+        AiGenerationAttemptSnapshot attempt,
+        AutoSuggestionOptions options,
+        DateTimeOffset now)
+    {
+        var hardTimeoutSeconds = Math.Max(options.AiGenerationLeaseSeconds, options.AiGenerationHardTimeoutSeconds);
+        return now - attempt.StartedAt > TimeSpan.FromSeconds(hardTimeoutSeconds);
+    }
+
+    private static ReconcilePlanner.Outcome DecideRetryOrFail(
+        TicketSuggestionSaga saga,
+        AutoSuggestionOptions options,
+        string failureReason)
+    {
+        if (saga.RetryCount < options.MaxGenerationRetries)
+            return new ReconcilePlanner.Outcome(ReconcileActions.Retry, RequiresGenerationRetry: true);
+
+        return new ReconcilePlanner.Outcome(ReconcileActions.Fail, failureReason);
     }
 }
 
@@ -85,12 +148,14 @@ internal static class TicketSuggestionActivities
         context.Saga.TicketVersionAtStart = msg.TicketVersion;
         context.Saga.CreatedAt = now;
         context.Saga.UpdatedAt = now;
+        context.Saga.CurrentAttemptIssuedAt = now;
         context.Saga.RowVersion = [0, 0, 0, 0, 0, 0, 0, 1];
     }
 
     internal static void StartNewAttempt(TicketSuggestionSaga saga)
     {
         saga.CurrentAttemptId = Guid.NewGuid();
+        saga.CurrentAttemptIssuedAt = DateTimeOffset.UtcNow;
         saga.GeneratedCategory = null;
         saga.GeneratedSuggestion = null;
         saga.GeneratedRelatedDocumentsJson = "[]";
@@ -114,6 +179,17 @@ internal static class TicketSuggestionActivities
 
     internal static StepTimeout CreateStepTimeout(BehaviorContext<TicketSuggestionSaga> context) =>
         new(context.Saga.CorrelationId, context.Saga.CurrentAttemptId);
+
+    internal static GenerationCheck CreateGenerationCheck(BehaviorContext<TicketSuggestionSaga> context) =>
+        new(context.Saga.CorrelationId, context.Saga.CurrentAttemptId);
+
+    internal static void HydrateFromAttempt(TicketSuggestionSaga saga, AiGenerationAttemptSnapshot attempt)
+    {
+        saga.GeneratedCategory = attempt.Category;
+        saga.GeneratedSuggestion = attempt.Suggestion;
+        saga.GeneratedRelatedDocumentsJson = attempt.RelatedDocumentsJson;
+        saga.UpdatedAt = DateTimeOffset.UtcNow;
+    }
 
     internal static void StoreGeneratedResult(BehaviorContext<TicketSuggestionSaga, ISuggestionGenerated> context)
     {

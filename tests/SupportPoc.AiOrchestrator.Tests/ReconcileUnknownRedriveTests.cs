@@ -36,6 +36,7 @@ public sealed class ReconcileUnknownRedriveTests : IDisposable
         Assert.True(ReconcileUnknownRedriveActivity.IsTerminalReconcileAction(ReconcileActions.Fail));
         Assert.False(ReconcileUnknownRedriveActivity.IsTerminalReconcileAction(ReconcileActions.Propose));
         Assert.False(ReconcileUnknownRedriveActivity.IsTerminalReconcileAction(ReconcileActions.Retry));
+        Assert.False(ReconcileUnknownRedriveActivity.IsTerminalReconcileAction(ReconcileActions.WaitForGeneration));
     }
 
     [Fact]
@@ -72,6 +73,7 @@ public sealed class ReconcileUnknownRedriveTests : IDisposable
             saga,
             options.Value,
             client,
+            new NullAttemptReader(),
             CancellationToken.None);
 
         Assert.Equal(ReconcileActions.Complete, outcome.Action);
@@ -194,6 +196,14 @@ public sealed class ReconcileUnknownRedriveTests : IDisposable
     }
 
     private OrchestratorDbContext CreateDbContext() => new(_options);
+
+    private sealed class NullAttemptReader : IAiGenerationAttemptReader
+    {
+        public Task<AiGenerationAttemptSnapshot?> GetByAttemptIdAsync(
+            Guid attemptId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<AiGenerationAttemptSnapshot?>(null);
+    }
 
     private static TicketSuggestionSaga NewSaga() =>
         new()

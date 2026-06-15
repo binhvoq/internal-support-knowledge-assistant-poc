@@ -1,3 +1,4 @@
+using SupportPoc.AiOrchestrator.Data;
 using SupportPoc.AiOrchestrator.Options;
 using SupportPoc.AiOrchestrator.Saga;
 using SupportPoc.AiOrchestrator.Services;
@@ -52,15 +53,38 @@ public sealed class TicketSuggestionReconcileTests
     }
 
     [Fact]
-    public void Decide_retries_generation_when_still_suggestible_without_suggestion()
+    public void Decide_waits_when_still_suggestible_without_suggestion_and_no_attempt_row()
     {
         var saga = NewSaga(retryCount: 0);
         var reconcile = Reconcile(AutoSuggestionReconcileDecision.StillSuggestible);
 
         var outcome = ReconcilePlanner.Decide(saga, DefaultOptions, reconcile);
 
+        Assert.Equal(ReconcileActions.WaitForGeneration, outcome.Action);
+        Assert.False(outcome.RequiresGenerationRetry);
+    }
+
+    [Fact]
+    public void Decide_retries_generation_when_still_suggestible_and_attempt_failed()
+    {
+        var attemptId = Guid.NewGuid();
+        var saga = NewSaga(retryCount: 0);
+        saga.CurrentAttemptId = attemptId;
+        var reconcile = Reconcile(AutoSuggestionReconcileDecision.StillSuggestible);
+        var attempt = new AiGenerationAttemptSnapshot(
+            attemptId,
+            AiGenerationAttemptStatus.Failed,
+            null,
+            DateTimeOffset.UtcNow,
+            null,
+            null,
+            "[]",
+            "LLM error");
+
+        var outcome = ReconcilePlanner.Decide(saga, DefaultOptions, reconcile, attempt);
+
         Assert.Equal(ReconcileActions.Retry, outcome.Action);
-        Assert.True(outcome.StartNewGenerationAttempt);
+        Assert.True(outcome.RequiresGenerationRetry);
     }
 
     [Fact]
@@ -90,13 +114,24 @@ public sealed class TicketSuggestionReconcileTests
     [Fact]
     public void Decide_fails_generation_when_still_suggestible_but_retries_exhausted()
     {
+        var attemptId = Guid.NewGuid();
         var saga = NewSaga(retryCount: DefaultOptions.MaxGenerationRetries);
+        saga.CurrentAttemptId = attemptId;
         var reconcile = Reconcile(AutoSuggestionReconcileDecision.StillSuggestible);
+        var attempt = new AiGenerationAttemptSnapshot(
+            attemptId,
+            AiGenerationAttemptStatus.Failed,
+            null,
+            DateTimeOffset.UtcNow,
+            null,
+            null,
+            "[]",
+            "LLM error");
 
-        var outcome = ReconcilePlanner.Decide(saga, DefaultOptions, reconcile);
+        var outcome = ReconcilePlanner.Decide(saga, DefaultOptions, reconcile, attempt);
 
         Assert.Equal(ReconcileActions.Fail, outcome.Action);
-        Assert.Equal("Generation timed out after retries.", outcome.FailureReason);
+        Assert.Equal("LLM error", outcome.FailureReason);
     }
 
     [Fact]
@@ -137,6 +172,7 @@ public sealed class TicketSuggestionReconcileTests
                 saga,
                 DefaultOptions,
                 client,
+                new NullAttemptReader(),
                 CancellationToken.None);
         });
 
@@ -147,13 +183,25 @@ public sealed class TicketSuggestionReconcileTests
     [Fact]
     public async Task ResolveReconcileOutcomeAsync_returns_domain_outcome_when_client_succeeds()
     {
+        var attemptId = Guid.NewGuid();
         var saga = NewSaga(retryCount: 0);
+        saga.CurrentAttemptId = attemptId;
         var client = new StubReconcileClient(Reconcile(AutoSuggestionReconcileDecision.StillSuggestible));
+        var reader = new StubAttemptReader(new AiGenerationAttemptSnapshot(
+            attemptId,
+            AiGenerationAttemptStatus.Failed,
+            null,
+            DateTimeOffset.UtcNow,
+            null,
+            null,
+            "[]",
+            "LLM error"));
 
         var (outcome, _) = await ReconcileTicketSuggestionActivity.ResolveReconcileOutcomeAsync(
             saga,
             DefaultOptions,
             client,
+            reader,
             CancellationToken.None);
 
         Assert.Equal(ReconcileActions.Retry, outcome.Action);
@@ -194,6 +242,22 @@ public sealed class TicketSuggestionReconcileTests
             Task.FromResult(result);
     }
 
+    private sealed class StubAttemptReader(AiGenerationAttemptSnapshot? snapshot) : IAiGenerationAttemptReader
+    {
+        public Task<AiGenerationAttemptSnapshot?> GetByAttemptIdAsync(
+            Guid attemptId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(snapshot);
+    }
+
+    private sealed class NullAttemptReader : IAiGenerationAttemptReader
+    {
+        public Task<AiGenerationAttemptSnapshot?> GetByAttemptIdAsync(
+            Guid attemptId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<AiGenerationAttemptSnapshot?>(null);
+    }
+
     private static TicketSuggestionSaga NewSaga(
         int retryCount = 0,
         int proposeRetryCount = 0,
@@ -202,6 +266,8 @@ public sealed class TicketSuggestionReconcileTests
         {
             CorrelationId = Guid.NewGuid(),
             TicketId = TestTicketIds.Default,
+            CurrentAttemptId = Guid.NewGuid(),
+            CurrentAttemptIssuedAt = DateTimeOffset.UtcNow,
             RetryCount = retryCount,
             ProposeRetryCount = proposeRetryCount,
             GeneratedSuggestion = generatedSuggestion

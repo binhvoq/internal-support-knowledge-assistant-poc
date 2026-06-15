@@ -6,6 +6,18 @@ public static class AiGenerationAttemptStatus
     public const string Running = "Running";
     public const string Completed = "Completed";
     public const string Failed = "Failed";
+    public const string Superseded = "Superseded";
+}
+
+public static class AiGenerationAttemptStatuses
+{
+    public static bool IsActive(string status) =>
+        status is AiGenerationAttemptStatus.Pending or AiGenerationAttemptStatus.Running;
+
+    public static bool IsTerminal(string status) =>
+        status is AiGenerationAttemptStatus.Completed
+            or AiGenerationAttemptStatus.Failed
+            or AiGenerationAttemptStatus.Superseded;
 }
 
 public sealed class AiGenerationAttemptEntity

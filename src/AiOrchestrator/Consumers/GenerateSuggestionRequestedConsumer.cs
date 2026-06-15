@@ -2,6 +2,7 @@ using System.Text.Json;
 using MassTransit;
 using Microsoft.EntityFrameworkCore;
 using SupportPoc.AiOrchestrator.Data;
+using SupportPoc.AiOrchestrator.Services;
 using SupportPoc.Shared.Contracts;
 using SupportPoc.Shared.Models;
 using SupportPoc.Shared.Testing;
@@ -14,13 +15,16 @@ public sealed class GenerateSuggestionRequestedConsumer : IConsumer<IGenerateSug
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly OrchestratorDbContext _db;
+    private readonly IAiGenerationAttemptLifecycle _attemptLifecycle;
     private readonly ILogger<GenerateSuggestionRequestedConsumer> _logger;
 
     public GenerateSuggestionRequestedConsumer(
         OrchestratorDbContext db,
+        IAiGenerationAttemptLifecycle attemptLifecycle,
         ILogger<GenerateSuggestionRequestedConsumer> logger)
     {
         _db = db;
+        _attemptLifecycle = attemptLifecycle;
         _logger = logger;
     }
 
@@ -100,6 +104,15 @@ public sealed class GenerateSuggestionRequestedConsumer : IConsumer<IGenerateSug
             return;
         }
 
+        if (existing.Status == AiGenerationAttemptStatus.Superseded)
+        {
+            _logger.LogInformation(
+                "AI attempt superseded — duplicate delivery ignored SagaId={SagaId} AttemptId={AttemptId}",
+                msg.SagaId,
+                msg.AttemptId);
+            return;
+        }
+
         _logger.LogInformation(
             "AI attempt already pending/running SagaId={SagaId} AttemptId={AttemptId} Status={Status}; duplicate delivery ignored.",
             msg.SagaId,
@@ -109,6 +122,18 @@ public sealed class GenerateSuggestionRequestedConsumer : IConsumer<IGenerateSug
 
     private async Task<bool> TryEnqueueAttemptAsync(IGenerateSuggestionRequested msg, CancellationToken cancellationToken)
     {
+        if (await _attemptLifecycle.HasActiveAttemptForJobAsync(
+                msg.JobId,
+                excludingAttemptId: msg.AttemptId,
+                cancellationToken))
+        {
+            _logger.LogWarning(
+                "AI attempt enqueue blocked — active attempt exists for JobId={JobId} AttemptId={AttemptId}",
+                msg.JobId,
+                msg.AttemptId);
+            return false;
+        }
+
         var now = DateTimeOffset.UtcNow;
         _db.AiGenerationAttempts.Add(new AiGenerationAttemptEntity
         {

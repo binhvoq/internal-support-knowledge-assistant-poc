@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using SupportPoc.AiOrchestrator.Consumers;
 using SupportPoc.AiOrchestrator.Data;
+using SupportPoc.AiOrchestrator.Services;
 using SupportPoc.Shared.Contracts;
 using SupportPoc.Shared.Models;
 
@@ -107,7 +108,10 @@ public sealed class GenerateSuggestionRequestedConsumerIdempotencyTests : IDispo
     }
 
     private GenerateSuggestionRequestedConsumer CreateConsumer() =>
-        new(_db, NullLogger<GenerateSuggestionRequestedConsumer>.Instance);
+        new(
+            _db,
+            new AiGenerationAttemptLifecycle(_db, NullLogger<AiGenerationAttemptLifecycle>.Instance),
+            NullLogger<GenerateSuggestionRequestedConsumer>.Instance);
 
     private static GenerateSuggestionRequested CreateMessage() =>
         new(
