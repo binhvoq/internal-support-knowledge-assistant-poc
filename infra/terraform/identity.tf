@@ -40,15 +40,15 @@ locals {
   }
 
   # Set by azuread_application_identifier_uri (tenant policy: URI must include appId).
-  entra_api_identifier_uri = local.entra_enabled ? azuread_application_identifier_uri.api[0].identifier_uri : null
-  entra_api_audience       = local.entra_api_identifier_uri
+  entra_api_identifier_uri   = local.entra_enabled ? azuread_application_identifier_uri.api[0].identifier_uri : null
+  entra_api_audience         = local.entra_api_identifier_uri
   entra_scope_access_as_user = local.entra_enabled ? "${local.entra_api_identifier_uri}/access_as_user" : null
 
   bootstrap_principals = local.entra_enabled ? (
     var.bootstrap_role_assignments != null ? var.bootstrap_role_assignments : {
-      "Support.Employee"       = coalesce(nullif(var.bootstrap_employee_principal_id, ""), var.bootstrap_user_id)
-      "Support.Agent"          = coalesce(nullif(var.bootstrap_agent_principal_id, ""), var.bootstrap_user_id)
-      "Support.KnowledgeAdmin" = coalesce(nullif(var.bootstrap_knowledge_admin_principal_id, ""), var.bootstrap_user_id)
+      "Support.Employee"       = var.bootstrap_employee_principal_id != "" ? var.bootstrap_employee_principal_id : var.bootstrap_user_id
+      "Support.Agent"          = var.bootstrap_agent_principal_id != "" ? var.bootstrap_agent_principal_id : var.bootstrap_user_id
+      "Support.KnowledgeAdmin" = var.bootstrap_knowledge_admin_principal_id != "" ? var.bootstrap_knowledge_admin_principal_id : var.bootstrap_user_id
     }
   ) : {}
 
@@ -56,13 +56,13 @@ locals {
     tenantId     = coalesce(var.tenant_id, data.azuread_client_config.current.tenant_id)
     tenantDomain = var.tenant_domain
     api = {
-      displayName    = azuread_application.api[0].display_name
-      clientId       = azuread_application.api[0].client_id
-      applicationId  = azuread_application.api[0].client_id
-      audience       = local.entra_api_audience
-      identifierUri  = local.entra_api_identifier_uri
-      scopeName      = "access_as_user"
-      scopeFull      = local.entra_scope_access_as_user
+      displayName   = azuread_application.api[0].display_name
+      clientId      = azuread_application.api[0].client_id
+      applicationId = azuread_application.api[0].client_id
+      audience      = local.entra_api_audience
+      identifierUri = local.entra_api_identifier_uri
+      scopeName     = "access_as_user"
+      scopeFull     = local.entra_scope_access_as_user
     }
     spa = {
       displayName  = azuread_application.spa[0].display_name
@@ -70,9 +70,9 @@ locals {
       redirectUris = var.spa_redirect_uris
     }
     mcpService = {
-      displayName  = azuread_application.mcp_service[0].display_name
-      clientId     = azuread_application.mcp_service[0].client_id
-      clientSecret = azuread_application_password.mcp_service[0].value
+      displayName   = azuread_application.mcp_service[0].display_name
+      clientId      = azuread_application.mcp_service[0].client_id
+      clientSecret  = azuread_application_password.mcp_service[0].value
       secretEndDate = azuread_application_password.mcp_service[0].end_date
     }
     appRoles = {
@@ -98,7 +98,7 @@ resource "azuread_application" "api" {
 
   display_name     = "${var.prefix} API (${var.suffix})"
   sign_in_audience = "AzureADMyOrg"
-  owners = [data.azuread_client_config.current.object_id]
+  owners           = [data.azuread_client_config.current.object_id]
 
   lifecycle {
     ignore_changes = [identifier_uris]

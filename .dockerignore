@@ -1,4 +1,5 @@
 **/.git
+**/.terraform
 **/.vs
 **/.vscode
 **/.cursor
@@ -7,6 +8,9 @@
 **/node_modules
 **/TestResults
 **/*.user
+**/*.tfstate
+**/*.tfstate.*
+**/tfplan
 config/azure.local.json
 .emulator/.env.docker
 frontend/dist

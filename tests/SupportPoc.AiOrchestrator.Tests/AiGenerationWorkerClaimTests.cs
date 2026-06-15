@@ -22,6 +22,24 @@ public sealed class AiGenerationWorkerClaimTests : IDisposable
     }
 
     [Fact]
+    public void BuildLeaseOwner_handles_short_machine_names()
+    {
+        var owner = AiGenerationWorkerService.BuildLeaseOwner(
+            "abc",
+            Guid.Parse("11111111-1111-1111-1111-111111111111"));
+
+        Assert.Equal("abc:11111111111111111111111111111111", owner);
+    }
+
+    [Fact]
+    public void BuildLeaseOwner_clamps_long_machine_names()
+    {
+        var owner = AiGenerationWorkerService.BuildLeaseOwner(new string('x', 80), Guid.NewGuid());
+
+        Assert.Equal(64, owner.Length);
+    }
+
+    [Fact]
     public async Task TryClaimNextAttempt_claims_pending_job()
     {
         var now = DateTimeOffset.UtcNow;

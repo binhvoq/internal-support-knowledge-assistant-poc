@@ -1,0 +1,21 @@
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS base
+WORKDIR /app
+EXPOSE 8080
+ENV ASPNETCORE_URLS=http://+:8080
+
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+COPY ["src/Shared/SupportPoc.Shared.csproj", "src/Shared/"]
+COPY ["src/McpToolServer/SupportPoc.McpToolServer.csproj", "src/McpToolServer/"]
+RUN dotnet restore "src/McpToolServer/SupportPoc.McpToolServer.csproj"
+COPY . .
+WORKDIR "/src/src/McpToolServer"
+RUN dotnet publish "SupportPoc.McpToolServer.csproj" -c Release -o /app/publish /p:UseAppHost=false
+
+FROM base AS final
+WORKDIR /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /app/publish .
+ENTRYPOINT ["dotnet", "SupportPoc.McpToolServer.dll"]

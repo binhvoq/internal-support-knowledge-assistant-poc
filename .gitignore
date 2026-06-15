@@ -12,9 +12,13 @@ logs/
 artifacts/
 test-pdfs/
 .env.local
+docker/cloud.env
 .emulator/.env.docker
 config/azure.local.json
 config/azure.resources.state.json
+infra/terraform/terraform.tfvars
+infra/terraform/*.tfplan
+infra/terraform/tfplan
 config/entra.provision.state.json
 config/entra-browser-session.local.json
 config/entra-browser-session.agent.local.json

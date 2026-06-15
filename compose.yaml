@@ -1,0 +1,150 @@
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "SupportPoc_LocalSql1!"
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'SupportPoc_LocalSql1!' -C -Q 'SELECT 1' || /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P 'SupportPoc_LocalSql1!' -Q 'SELECT 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  servicebus-emulator:
+    image: mcr.microsoft.com/azure-messaging/servicebus-emulator:latest
+    environment:
+      ACCEPT_EULA: "Y"
+      DOTNET_gcServer: "1"
+      SQL_SERVER: "sqlserver"
+      MSSQL_SA_PASSWORD: "SupportPoc_LocalSql1!"
+      SAS_KEY_VALUE: "SAS_KEY_VALUE"
+    ports:
+      - "5672:5672"
+      - "5300:5300"
+    volumes:
+      - ./docker/servicebus-config.json:/ServiceBus_Emulator/ConfigFiles/Config.json:ro
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+
+  ticket-service:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ticket-service
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Docker"
+      DOTNET_ENVIRONMENT: "Docker"
+      SUPPORTPOC_ALLOW_INSECURE_PRODUCTION: "true"
+    entrypoint: ["/bin/sh", "-c", "until curl -s --connect-timeout 2 http://servicebus-emulator:5300 >/dev/null; do echo waiting for servicebus-emulator; sleep 2; done; exec dotnet SupportPoc.TicketService.dll"]
+    ports:
+      - "5001:8080"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      servicebus-emulator:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+
+  knowledge-service:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.knowledge-service
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Docker"
+      DOTNET_ENVIRONMENT: "Docker"
+      SUPPORTPOC_ALLOW_INSECURE_PRODUCTION: "true"
+    entrypoint: ["/bin/sh", "-c", "until curl -s --connect-timeout 2 http://servicebus-emulator:5300 >/dev/null; do echo waiting for servicebus-emulator; sleep 2; done; exec dotnet SupportPoc.KnowledgeService.dll"]
+    ports:
+      - "5002:8080"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      servicebus-emulator:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+
+  mcp-tool-server:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mcp-tool-server
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Docker"
+      DOTNET_ENVIRONMENT: "Docker"
+      SUPPORTPOC_ALLOW_INSECURE_PRODUCTION: "true"
+      Services__TicketService: "http://ticket-service:8080"
+      Services__KnowledgeService: "http://knowledge-service:8080"
+      AzureAd__Enabled: "false"
+    ports:
+      - "5004:8080"
+    depends_on:
+      ticket-service:
+        condition: service_healthy
+      knowledge-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+
+  ai-orchestrator:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ai-orchestrator
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Docker"
+      DOTNET_ENVIRONMENT: "Docker"
+      SUPPORTPOC_ALLOW_INSECURE_PRODUCTION: "true"
+      AzureOpenAI__ChatEnabled: "false"
+    entrypoint: ["/bin/sh", "-c", "until curl -s --connect-timeout 2 http://servicebus-emulator:5300 >/dev/null; do echo waiting for servicebus-emulator; sleep 2; done; exec dotnet SupportPoc.AiOrchestrator.dll"]
+    ports:
+      - "5003:8080"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      servicebus-emulator:
+        condition: service_started
+      ticket-service:
+        condition: service_healthy
+      knowledge-service:
+        condition: service_healthy
+      mcp-tool-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+      args:
+        VITE_TICKET_API: "http://localhost:5001"
+        VITE_KNOWLEDGE_API: "http://localhost:5002"
+        VITE_AI_API: "http://localhost:5003"
+    ports:
+      - "3000:80"
+    depends_on:
+      ticket-service:
+        condition: service_healthy
+      knowledge-service:
+        condition: service_healthy
+      ai-orchestrator:
+        condition: service_healthy
+
+volumes:
+  sqlserver-data:

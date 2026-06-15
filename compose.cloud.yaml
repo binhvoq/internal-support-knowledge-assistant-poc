@@ -1,0 +1,69 @@
+# Cloud override for Docker:
+# - Keeps SQL Server and Azure Service Bus emulator local from compose.yaml.
+# - Enables real Entra ID, Azure OpenAI, Azure AI Search, Azure Storage, App Insights.
+#
+# Usage:
+#   Copy docker/cloud.env.example to docker/cloud.env and fill it.
+#   docker compose --env-file docker/cloud.env -f compose.yaml -f compose.cloud.yaml up -d --build
+
+services:
+  ticket-service:
+    environment:
+      AzureAd__Enabled: "true"
+      AzureAd__TenantId: "${AAD_TENANT_ID}"
+      AzureAd__ClientId: "${AAD_API_CLIENT_ID}"
+      AzureAd__Audience: "${AAD_API_AUDIENCE}"
+      AzureAd__McpClientId: "${AAD_MCP_CLIENT_ID}"
+      AzureAd__McpClientSecret: "${AAD_MCP_CLIENT_SECRET}"
+      ApplicationInsights__ConnectionString: "${APPLICATIONINSIGHTS_CONNECTION_STRING}"
+
+  knowledge-service:
+    environment:
+      AzureAd__Enabled: "true"
+      AzureAd__TenantId: "${AAD_TENANT_ID}"
+      AzureAd__ClientId: "${AAD_API_CLIENT_ID}"
+      AzureAd__Audience: "${AAD_API_AUDIENCE}"
+      AzureSearch__Endpoint: "${AZURE_SEARCH_ENDPOINT}"
+      AzureSearch__ApiKey: "${AZURE_SEARCH_API_KEY}"
+      AzureSearch__IndexName: "${AZURE_SEARCH_INDEX_NAME}"
+      AzureOpenAI__Endpoint: "${AZURE_OPENAI_ENDPOINT}"
+      AzureOpenAI__ApiKey: "${AZURE_OPENAI_API_KEY}"
+      AzureOpenAI__EmbeddingDeployment: "${AZURE_OPENAI_EMBEDDING_DEPLOYMENT}"
+      AzureStorage__ConnectionString: "${AZURE_STORAGE_CONNECTION_STRING}"
+      ApplicationInsights__ConnectionString: "${APPLICATIONINSIGHTS_CONNECTION_STRING}"
+
+  mcp-tool-server:
+    environment:
+      AzureAd__Enabled: "true"
+      AzureAd__TenantId: "${AAD_TENANT_ID}"
+      AzureAd__ClientId: "${AAD_API_CLIENT_ID}"
+      AzureAd__Audience: "${AAD_API_AUDIENCE}"
+      AzureAd__McpClientId: "${AAD_MCP_CLIENT_ID}"
+      AzureAd__McpClientSecret: "${AAD_MCP_CLIENT_SECRET}"
+
+  ai-orchestrator:
+    environment:
+      AzureAd__Enabled: "true"
+      AzureAd__TenantId: "${AAD_TENANT_ID}"
+      AzureAd__ClientId: "${AAD_API_CLIENT_ID}"
+      AzureAd__Audience: "${AAD_API_AUDIENCE}"
+      AzureAd__McpClientId: "${AAD_MCP_CLIENT_ID}"
+      AzureAd__McpClientSecret: "${AAD_MCP_CLIENT_SECRET}"
+      AzureOpenAI__Endpoint: "${AZURE_OPENAI_ENDPOINT}"
+      AzureOpenAI__ApiKey: "${AZURE_OPENAI_API_KEY}"
+      AzureOpenAI__ChatEndpoint: "${AZURE_OPENAI_CHAT_ENDPOINT}"
+      AzureOpenAI__ChatApiKey: "${AZURE_OPENAI_CHAT_API_KEY}"
+      AzureOpenAI__ChatDeployment: "${AZURE_OPENAI_CHAT_DEPLOYMENT}"
+      AzureOpenAI__ChatEnabled: "true"
+      ApplicationInsights__ConnectionString: "${APPLICATIONINSIGHTS_CONNECTION_STRING}"
+
+  frontend:
+    build:
+      args:
+        VITE_TICKET_API: "http://localhost:5001"
+        VITE_KNOWLEDGE_API: "http://localhost:5002"
+        VITE_AI_API: "http://localhost:5003"
+        VITE_AAD_TENANT_ID: "${AAD_TENANT_ID}"
+        VITE_AAD_AUTHORITY: "${AAD_AUTHORITY}"
+        VITE_AAD_CLIENT_ID: "${AAD_SPA_CLIENT_ID}"
+        VITE_AAD_API_SCOPE: "${AAD_API_SCOPE}"

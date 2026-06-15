@@ -1,0 +1,34 @@
+# Copy to terraform.tfvars and adjust before `terraform apply`.
+
+resource_group_name = "rg-internal-support-dev"
+location            = "southeastasia"
+prefix              = "support"
+suffix              = "dev01"
+
+# Azure OpenAI availability differs by region/model quota. Change these if your subscription
+# cannot deploy the selected models in eastus.
+embedding_location = "eastus"
+chat_location      = "eastus"
+
+search_sku = "basic"
+
+tenant_id     = "00000000-0000-0000-0000-000000000000"
+tenant_domain = "contoso.onmicrosoft.com"
+
+# Docker frontend and Vite dev frontend.
+spa_redirect_uris = [
+  "http://localhost:3000/",
+  "http://127.0.0.1:3000/",
+  "http://localhost:5173/",
+  "http://127.0.0.1:5173/"
+]
+
+# First deploy: use your Entra user object ID so you can login and manage data.
+# Later, split these into separate groups/users if needed.
+bootstrap_user_id = "00000000-0000-0000-0000-000000000000"
+
+tags = {
+  app         = "internal-support"
+  managed_by  = "terraform"
+  environment = "dev"
+}

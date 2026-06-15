@@ -12,7 +12,7 @@ public sealed class AiGenerationWorkerService(
 {
     private const int MaxClaimCandidates = 5;
 
-    private readonly string _leaseOwner = $"{Environment.MachineName}:{Guid.NewGuid():N}"[..64];
+    private readonly string _leaseOwner = BuildLeaseOwner(Environment.MachineName, Guid.NewGuid());
     private SemaphoreSlim? _concurrency;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -126,6 +126,12 @@ public sealed class AiGenerationWorkerService(
         || (attempt.Status == AiGenerationAttemptStatus.Running
             && attempt.LeaseUntil is not null
             && attempt.LeaseUntil < now);
+
+    internal static string BuildLeaseOwner(string machineName, Guid instanceId)
+    {
+        var value = $"{machineName}:{instanceId:N}";
+        return value.Length <= 64 ? value : value[..64];
+    }
 
     private static async Task<bool> TryConditionalClaimAsync(
         OrchestratorDbContext db,
@@ -305,7 +311,7 @@ public sealed class AiGenerationWorkerService(
         {
             try
             {
-                await Task.Delay(interval, stoppingToken);
+                await Task.Delay(interval, pipelineCts.Token);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
