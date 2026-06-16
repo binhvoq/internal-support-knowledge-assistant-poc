@@ -1,0 +1,37 @@
+# Local developer infrastructure only.
+# Use this when running .NET services and Vite frontend directly on the host.
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "SupportPoc_LocalSql1!"
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'SupportPoc_LocalSql1!' -C -Q 'SELECT 1' || /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P 'SupportPoc_LocalSql1!' -Q 'SELECT 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  servicebus-emulator:
+    image: mcr.microsoft.com/azure-messaging/servicebus-emulator:latest
+    environment:
+      ACCEPT_EULA: "Y"
+      DOTNET_gcServer: "1"
+      SQL_SERVER: "sqlserver"
+      MSSQL_SA_PASSWORD: "SupportPoc_LocalSql1!"
+      SAS_KEY_VALUE: "SAS_KEY_VALUE"
+    ports:
+      - "5672:5672"
+      - "5300:5300"
+    volumes:
+      - ./docker/servicebus-config.json:/ServiceBus_Emulator/ConfigFiles/Config.json:ro
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+
+volumes:
+  sqlserver-data:

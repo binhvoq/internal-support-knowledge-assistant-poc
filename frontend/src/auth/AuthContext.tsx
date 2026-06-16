@@ -74,8 +74,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     const msal = getMsal();
     if (!msal || !account) return;
-    await msal.logoutPopup({ account });
     setAccount(null);
+    await msal.logoutRedirect({
+      account,
+      postLogoutRedirectUri: window.location.origin + '/',
+    });
   }, [account]);
 
   const getAccessToken = useCallback(
@@ -84,7 +87,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!msal || !account) return null;
       const useScopes = scopes?.length ? scopes : apiScope ? [apiScope] : loginScopes();
       try {
-        const result = await msal.acquireTokenSilent({ account, scopes: useScopes });
+        const result = await msal.acquireTokenSilent({ account, scopes: useScopes, forceRefresh: true });
         return result.accessToken;
       } catch (e) {
         if (e instanceof InteractionRequiredAuthError) {
@@ -112,6 +115,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error('useAuth must be used within AuthProvider');

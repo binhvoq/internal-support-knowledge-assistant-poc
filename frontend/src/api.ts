@@ -39,6 +39,10 @@ export function setAccessTokenProvider(fn: () => Promise<string | null>) {
   tokenProvider = fn;
 }
 
+export function clearAccessTokenProvider() {
+  tokenProvider = null;
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const isFormData = init?.body instanceof FormData;
   const headers: Record<string, string> = isFormData ? {} : { 'Content-Type': 'application/json' };

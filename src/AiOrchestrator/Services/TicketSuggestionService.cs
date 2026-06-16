@@ -20,6 +20,7 @@ public sealed class TicketSuggestionService
     private readonly McpDynamicPluginLoader _mcpLoader;
     private readonly McpToolAccessService _toolAccess;
     private readonly Kernel _kernel;
+    private readonly ITicketSnapshotClient _ticketSnapshotClient;
     private readonly IChatCompletionService? _chat;
     private readonly AzureOpenAIOptions _openAiOptions;
     private readonly ILogger<TicketSuggestionService> _logger;
@@ -30,6 +31,7 @@ public sealed class TicketSuggestionService
         McpDynamicPluginLoader mcpLoader,
         McpToolAccessService toolAccess,
         Kernel kernel,
+        ITicketSnapshotClient ticketSnapshotClient,
         IOptions<AzureOpenAIOptions> openAiOptions,
         ILogger<TicketSuggestionService> logger)
     {
@@ -38,6 +40,7 @@ public sealed class TicketSuggestionService
         _mcpLoader = mcpLoader;
         _toolAccess = toolAccess;
         _kernel = kernel;
+        _ticketSnapshotClient = ticketSnapshotClient;
         _openAiOptions = openAiOptions.Value;
         _logger = logger;
         _chat = _openAiOptions.Enabled ? kernel.GetRequiredService<IChatCompletionService>() : null;
@@ -48,6 +51,14 @@ public sealed class TicketSuggestionService
         IEnumerable<string>? roles = null,
         CancellationToken cancellationToken = default)
     {
+        var ticketId = TicketIds.TryExtractFromText(message);
+        if (!string.IsNullOrWhiteSpace(ticketId))
+        {
+            var snapshot = await _ticketSnapshotClient.GetTicketAsync(ticketId, cancellationToken);
+            if (snapshot is not null)
+                return FormatTicketSnapshotReply(ticketId, snapshot);
+        }
+
         if (!_openAiOptions.Enabled || _chat is null)
             return await OfflineChatAsync(message, roles, cancellationToken);
 
@@ -159,5 +170,17 @@ public sealed class TicketSuggestionService
 
         reply = "";
         return false;
+    }
+
+    private static string FormatTicketSnapshotReply(string requestedTicketId, TicketSnapshot snapshot)
+    {
+        var suggestionText = snapshot.HasAiSuggestion
+            ? "AI da tao goi y tra loi va dang cho agent xac nhan."
+            : "AI chua co goi y tra loi.";
+        var finalText = snapshot.HasFinalAnswer
+            ? "Ticket da co cau tra loi cuoi cung."
+            : "Ticket chua co cau tra loi cuoi cung.";
+
+        return $"Ticket {requestedTicketId} hien dang o trang thai {snapshot.Status}. {suggestionText} {finalText} Ticket noi bo: {snapshot.TicketId}, version {snapshot.Version}.";
     }
 }

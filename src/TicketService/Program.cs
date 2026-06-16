@@ -76,6 +76,13 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<TicketDbContext>();
     await DatabaseProvider.EnsureDatabaseReadyAsync(db);
+    var existingIds = await db.Tickets.AsNoTracking().Select(t => t.Id).ToListAsync();
+    var missingSeeds = SeedData.Tickets.Where(t => !existingIds.Contains(t.Id)).ToList();
+    if (missingSeeds.Count > 0)
+    {
+        db.Tickets.AddRange(missingSeeds);
+        await db.SaveChangesAsync();
+    }
     // IdempotencyRecords + Ticket + MassTransit OutboxState/OutboxMessage/InboxState tables tu sinh.
 }
 
@@ -275,6 +282,14 @@ app.MapGet("/tickets/{ticketId}/auto-suggestion-reconcile", async (
 app.MapGet("/tickets/{id}", async (string id, HttpContext httpContext, TicketDbContext db) =>
 {
     var entity = await db.Tickets.FindAsync(id);
+    if (entity is null && id.StartsWith("TK-", StringComparison.OrdinalIgnoreCase))
+    {
+        var alias = id.ToUpperInvariant();
+        entity = await db.Tickets
+            .Where(t => t.Question.Contains(alias))
+            .OrderByDescending(t => t.CreatedAt)
+            .FirstOrDefaultAsync();
+    }
     if (entity is null)
         return Results.NotFound();
     if (entraEnabled && !EntraTicketAccess.CanReadTicket(entity.OwnerOid, entity.EmployeeId, httpContext.User))

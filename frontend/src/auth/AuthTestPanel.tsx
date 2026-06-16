@@ -84,15 +84,17 @@ export function AuthTestPanel() {
     };
 
     if (apiScope) await tryScope(`Access token — API (${apiScope})`, [apiScope]);
-    await tryScope('Access token — Graph User.Read', ['User.Read']);
 
     setTokens(out);
     setBusy(false);
   }, [account, getAccessToken]);
 
   useEffect(() => {
-    if (account && ready) void refreshTokens();
-    else setTokens([]);
+    if (account && ready) {
+      queueMicrotask(() => void refreshTokens());
+    } else {
+      queueMicrotask(() => setTokens([]));
+    }
   }, [account, ready, refreshTokens]);
 
   const onLogin = async () => {

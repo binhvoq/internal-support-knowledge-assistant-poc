@@ -3,7 +3,6 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Identity.Web;
 using SupportPoc.Shared.Options;
 
 namespace SupportPoc.Shared.Auth;
@@ -20,20 +19,32 @@ public static class EntraAuthExtensions
 
         var azureAd = section.Get<AzureAdOptions>() ?? new AzureAdOptions();
 
-        services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-            .AddMicrosoftIdentityWebApi(section);
+        var clientId = azureAd.ClientId;
+        var audience = string.IsNullOrWhiteSpace(azureAd.Audience) ? clientId : azureAd.Audience;
+        var instance = string.IsNullOrWhiteSpace(azureAd.Instance)
+            ? "https://login.microsoftonline.com/"
+            : azureAd.Instance;
+        var authority = $"{instance.TrimEnd('/')}/{azureAd.TenantId}/v2.0";
 
-        services.Configure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, jwtOptions =>
-        {
-            var clientId = azureAd.ClientId;
-            var audience = string.IsNullOrWhiteSpace(azureAd.Audience) ? clientId : azureAd.Audience;
-            jwtOptions.TokenValidationParameters.ValidAudiences =
-            [
-                audience,
-                clientId,
-                $"api://{clientId}",
-            ];
-        });
+        services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+            .AddJwtBearer(jwtOptions =>
+            {
+                jwtOptions.Authority = authority;
+                jwtOptions.Audience = clientId;
+                jwtOptions.MapInboundClaims = false;
+                jwtOptions.TokenValidationParameters.ValidAudiences =
+                [
+                    audience,
+                    clientId,
+                    $"api://{clientId}",
+                ];
+                jwtOptions.TokenValidationParameters.ValidIssuers =
+                [
+                    $"{instance.TrimEnd('/')}/{azureAd.TenantId}/v2.0",
+                    $"https://sts.windows.net/{azureAd.TenantId}/",
+                ];
+                jwtOptions.TokenValidationParameters.RoleClaimType = "roles";
+            });
 
         services.AddAuthorization(options =>
         {

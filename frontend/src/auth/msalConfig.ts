@@ -31,7 +31,7 @@ export const msalConfig: Configuration = {
 
 /** Scopes for login + API smoke test */
 export function loginScopes(): string[] {
-  const scopes = ['openid', 'profile', 'offline_access', 'User.Read'];
+  const scopes = ['openid', 'profile', 'offline_access'];
   if (apiScope) scopes.push(apiScope);
   return scopes;
 }
