@@ -1,6 +1,6 @@
-const ticketBase = import.meta.env.VITE_TICKET_API ?? 'http://localhost:5001';
-const knowledgeBase = import.meta.env.VITE_KNOWLEDGE_API ?? 'http://localhost:5002';
-const aiBase = import.meta.env.VITE_AI_API ?? 'http://localhost:5003';
+const ticketBase = '/api/tickets';
+const knowledgeBase = '/api/knowledge';
+const aiBase = '/api/ai';
 
 export type Ticket = {
   id: string;
@@ -82,25 +82,25 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   createTicket: (body: { employeeId: string; question: string; category?: string }) =>
-    request<Ticket>(`${ticketBase}/tickets`, { method: 'POST', body: JSON.stringify(body) }),
-  listMyTickets: () => request<Ticket[]>(`${ticketBase}/tickets/mine`),
+    request<Ticket>(ticketBase, { method: 'POST', body: JSON.stringify(body) }),
+  listMyTickets: () => request<Ticket[]>(`${ticketBase}/mine`),
   listTickets: (status?: string, category?: string) => {
     const params = new URLSearchParams();
     if (status) params.set('status', status);
     if (category) params.set('category', category);
     const q = params.toString();
-    return request<Ticket[]>(`${ticketBase}/tickets${q ? `?${q}` : ''}`);
+    return request<Ticket[]>(`${ticketBase}${q ? `?${q}` : ''}`);
   },
-  getTicket: (id: string) => request<Ticket>(`${ticketBase}/tickets/${id}`),
+  getTicket: (id: string) => request<Ticket>(`${ticketBase}/${id}`),
   resolveTicket: (id: string, finalAnswer?: string) =>
-    request<Ticket>(`${ticketBase}/tickets/${id}/resolve`, {
+    request<Ticket>(`${ticketBase}/${id}/resolve`, {
       method: 'POST',
       body: JSON.stringify({ finalAnswer }),
     }),
   reopenTicket: (id: string) =>
-    request<Ticket>(`${ticketBase}/tickets/${id}/reopen`, { method: 'POST' }),
+    request<Ticket>(`${ticketBase}/${id}/reopen`, { method: 'POST' }),
   patchTicket: (id: string, body: { status: string; finalAnswer?: string }) =>
-    request<Ticket>(`${ticketBase}/tickets/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    request<Ticket>(`${ticketBase}/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   listDocuments: () => request<KnowledgeDocument[]>(`${knowledgeBase}/documents`),
   createDocument: (body: { title: string; category: string; content: string; sourceUrl?: string }) =>
     request<KnowledgeDocument>(`${knowledgeBase}/documents`, { method: 'POST', body: JSON.stringify(body) }),
@@ -115,7 +115,7 @@ export const api = {
     request<{ status: string; documentId: string }>(`${knowledgeBase}/documents/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   reindex: () => request<{ status: string; documentCount: number }>(`${knowledgeBase}/documents/reindex`, { method: 'POST' }),
   reindexStatus: () => request<{ status: string; lastError?: string }>(`${knowledgeBase}/documents/reindex-status`),
-  chat: (message: string) => request<{ reply: string }>(`${aiBase}/ai/chat`, { method: 'POST', body: JSON.stringify({ message }) }),
+  chat: (message: string) => request<{ reply: string }>(`${aiBase}/chat`, { method: 'POST', body: JSON.stringify({ message }) }),
   getAutoSuggestionJob: (ticketId: string) =>
     request<{ jobId: string; ticketId: string; status: string; failureReason?: string; discardReason?: string }>(
       `${aiBase}/tickets/${encodeURIComponent(ticketId)}/auto-suggestion`

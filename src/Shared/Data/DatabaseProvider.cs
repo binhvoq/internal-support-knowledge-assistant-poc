@@ -52,6 +52,13 @@ public static class DatabaseProvider
         parameter.ParameterName = "@db";
         parameter.Value = databaseName;
         command.Parameters.Add(parameter);
-        await command.ExecuteNonQueryAsync(cancellationToken);
+        try
+        {
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        catch (SqlException ex) when (ex.Number == 1801)
+        {
+            // Database already exists. This is expected on re-deploys because Terraform creates it first.
+        }
     }
 }

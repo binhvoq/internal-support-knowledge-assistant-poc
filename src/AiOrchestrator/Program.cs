@@ -128,6 +128,20 @@ builder.Services.AddMassTransit(mt =>
 builder.Services.AddCors(options =>
     options.AddDefaultPolicy(p => p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
 var app = builder.Build();
+app.Use(async (context, next) =>
+{
+    if (HttpMethods.IsOptions(context.Request.Method))
+    {
+        context.Response.Headers.AccessControlAllowOrigin = context.Request.Headers.Origin.ToString();
+        context.Response.Headers.AccessControlAllowHeaders = "authorization,content-type";
+        context.Response.Headers.AccessControlAllowMethods = "GET,POST,OPTIONS";
+        context.Response.Headers.AccessControlAllowCredentials = "true";
+        context.Response.StatusCode = StatusCodes.Status204NoContent;
+        return;
+    }
+
+    await next();
+});
 app.UseCors();
 if (entraEnabled)
     app.UseSupportPocEntraAuth();
@@ -201,6 +215,58 @@ app.MapGet("/ready", async (
         note = "Kiem tra transport/DNS va Entra outbound (neu bat). Khong chung minh consumer delivery end-to-end."
     });
 }).AllowAnonymous();
+
+app.MapGet("/debug/chat-ready", (
+    IOptions<AzureOpenAIOptions> openAiOpts,
+    IOptions<ServiceEndpointsOptions> serviceEndpoints,
+    IOptions<AzureAdOptions> azureAdOpts) =>
+{
+    var openAi = openAiOpts.Value;
+    string? ResolveHost(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+        return Uri.TryCreate(value, UriKind.Absolute, out var uri) ? uri.Host : value;
+    }
+
+    var azureAd = azureAdOpts.Value;
+    var mcpDisabled = serviceEndpoints.Value.IsMcpToolServerDisabled;
+    return Results.Ok(new
+    {
+        ready = openAi.Enabled,
+        openAi = new
+        {
+            enabled = openAi.Enabled,
+            configured = openAi.ChatConfigured,
+            chatEnabled = openAi.ChatEnabledResolved,
+            chatDeployment = openAi.ChatDeployment,
+            endpointConfigured = !string.IsNullOrWhiteSpace(openAi.ChatEndpointResolved),
+            apiKeyConfigured = !string.IsNullOrWhiteSpace(openAi.ChatApiKeyResolved),
+            endpointHost = ResolveHost(openAi.ChatEndpointResolved)
+        },
+        services = new
+        {
+            knowledgeServiceHost = ResolveHost(serviceEndpoints.Value.KnowledgeService),
+            mcp = new
+            {
+                enabled = !mcpDisabled,
+                host = mcpDisabled ? null : ResolveHost(serviceEndpoints.Value.McpToolServer),
+                note = mcpDisabled
+                    ? "MCP tool server disabled by configuration."
+                    : "MCP tool server enabled."
+            }
+        },
+        entra = new
+        {
+            enabled = azureAd.Enabled,
+            tenantId = azureAd.TenantId,
+            clientId = azureAd.ClientId,
+            audience = azureAd.Audience,
+            scope = azureAd.Scope
+        },
+        note = "Chi bao config readiness; khong chung minh OpenAI hop le cho prompt cu the."
+    });
+}).WithDebugOrServicePolicy(entraEnabled, app.Environment);
 static string MapSagaStatusForUi(string? currentState) => currentState switch
 {
     SagaProcessState.GeneratingSuggestion => AutoSuggestionJobStatus.Running,

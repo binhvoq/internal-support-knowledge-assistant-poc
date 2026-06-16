@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using SupportPoc.Shared;
 using SupportPoc.Shared.Formatting;
@@ -54,45 +55,100 @@ public sealed class TicketSuggestionService
         var ticketId = TicketIds.TryExtractFromText(message);
         if (!string.IsNullOrWhiteSpace(ticketId))
         {
-            var snapshot = await _ticketSnapshotClient.GetTicketAsync(ticketId, cancellationToken);
-            if (snapshot is not null)
-                return FormatTicketSnapshotReply(ticketId, snapshot);
+            try
+            {
+                var snapshot = await _ticketSnapshotClient.GetTicketAsync(ticketId, cancellationToken);
+                if (snapshot is not null)
+                    return FormatTicketSnapshotReply(ticketId, snapshot);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Ticket snapshot lookup that bai cho {TicketId}; fallback offline.", ticketId);
+            }
         }
 
         if (!_openAiOptions.Enabled || _chat is null)
             return await OfflineChatAsync(message, roles, cancellationToken);
 
-        var catalog = await _mcpLoader.LoadCatalogAsync(cancellationToken);
-        var allowedFunctions = await _toolAccess.GetAllowedFunctionsAsync(_kernel, roles, cancellationToken);
-        var related = await _pipeline.SearchKnowledgeAsync(message, null, cancellationToken);
-        var knowledgeContext = BuildKnowledgeContext(related);
-        var settings = new AzureOpenAIPromptExecutionSettings
-        {
-            FunctionChoiceBehavior = FunctionChoiceBehavior.Auto(functions: allowedFunctions)
-        };
-
-        var history = new ChatHistory();
-        history.AddSystemMessage($"""
-            Ban la tro ly ho tro noi bo. Chi tra loi dua tren chunk tai lieu tim duoc hoac ket qua MCP tool.
-            Neu khong co chunk phu hop hoac khong du thong tin, noi ro can support agent xu ly. Khong tu bia chinh sach.
-            Chunk tai lieu noi bo da tim truoc:
-            {knowledgeContext}
-
-            Cac MCP tool hien co (tu tools/list):
-            {catalog.DescribeForPrompt(allowedFunctions.Select(function => function.Name))}
-            Hay chon tool phu hop theo ten va schema tu server.
-            """);
-        history.AddUserMessage(message);
-
+        IReadOnlyList<RelatedDocument> related = [];
         try
         {
+            related = await _pipeline.SearchKnowledgeAsync(message, null, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "KnowledgeService search that bai trong chat, tiep tuc voi context rong.");
+        }
+
+        McpToolCatalog? catalog = null;
+        IReadOnlyList<KernelFunction> allowedFunctions = [];
+        if (_mcpLoader.IsEnabled)
+        {
+            try
+            {
+                catalog = await _mcpLoader.LoadCatalogAsync(cancellationToken);
+                allowedFunctions = await _toolAccess.GetAllowedFunctionsAsync(_kernel, roles, cancellationToken);
+                _logger.LogInformation(
+                    "Chat tool context ready: {ToolCount} tools, {AllowedCount} allowed.",
+                    catalog.Tools.Count,
+                    allowedFunctions.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "MCP tool context that bai trong chat, tiep tuc khong dung tool.");
+            }
+        }
+        else
+        {
+            _logger.LogInformation("MCP tool server disabled by configuration; bo qua tool context trong chat.");
+        }
+
+        var knowledgeContext = BuildKnowledgeContext(related);
+        try
+        {
+            var settings = new AzureOpenAIPromptExecutionSettings
+            {
+                FunctionChoiceBehavior = allowedFunctions.Count > 0
+                    ? FunctionChoiceBehavior.Auto(functions: allowedFunctions)
+                    : null
+            };
+
+            var history = new ChatHistory();
+            history.AddSystemMessage($"""
+                Ban la tro ly ho tro noi bo. Chi tra loi dua tren chunk tai lieu tim duoc hoac ket qua MCP tool.
+                Neu khong co chunk phu hop hoac khong du thong tin, noi ro can support agent xu ly. Khong tu bia chinh sach.
+                Chunk tai lieu noi bo da tim truoc:
+                {knowledgeContext}
+
+                Cac MCP tool hien co (tu tools/list):
+                {(catalog is null ? "Khong tai duoc MCP catalog." : catalog.DescribeForPrompt(allowedFunctions.Select(function => function.Name)))}
+                Hay chon tool phu hop theo ten va schema tu server.
+                """);
+            history.AddUserMessage(message);
+
             var response = await _chat.GetChatMessageContentAsync(history, settings, _kernel, cancellationToken);
             return response.Content ?? "Khong co phan hoi tu AI.";
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Azure OpenAI chat that bai; dung MCP fallback.");
-            return await OfflineChatAsync(message, roles, cancellationToken);
+            _logger.LogWarning(
+                ex,
+                "Chat pipeline that bai; fallback offline. OpenAIEnabled={OpenAiEnabled} ChatConfigured={ChatConfigured} RelatedCount={RelatedCount} AllowedToolCount={AllowedToolCount}",
+                _openAiOptions.Enabled,
+                _openAiOptions.ChatConfigured,
+                related.Count,
+                allowedFunctions.Count);
+            try
+            {
+                return await OfflineChatAsync(message, roles, cancellationToken, related);
+            }
+            catch (Exception fallbackEx)
+            {
+                _logger.LogError(fallbackEx, "Offline fallback chat that bai.");
+                return "He thong AI tam thoi chua san sang. Vui long thu lai hoac mo ticket detail.";
+            }
         }
     }
 
@@ -114,11 +170,15 @@ public sealed class TicketSuggestionService
     private async Task<string> OfflineChatAsync(
         string message,
         IEnumerable<string>? roles,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyList<RelatedDocument>? related = null)
     {
         var ticketId = TicketIds.TryExtractFromText(message);
         if (!string.IsNullOrWhiteSpace(ticketId))
         {
+            if (!_mcpLoader.IsEnabled)
+                return $"MCP tool server dang bi vo hieu hoa trong cloud. Khong the doc ticket {ticketId} bang tool, hay thu ticket detail hoac support queue.";
+
             var catalog = await _mcpLoader.LoadCatalogAsync(cancellationToken);
             var toolName = catalog.Require("get_ticket");
             var allowedTools = await _toolAccess.GetAllowedToolNamesAsync(roles, cancellationToken);
@@ -132,6 +192,21 @@ public sealed class TicketSuggestionService
             if (TryFormatTicketStatusReply(ticketId, raw, out var formatted))
                 return formatted;
             return raw;
+        }
+
+        if (related is { Count: > 0 })
+        {
+            var first = related[0];
+            var preview = string.IsNullOrWhiteSpace(first.Content) ? first.Title : first.Content.Trim();
+            if (preview.Length > 500)
+                preview = preview[..500] + "...";
+
+            return $"""
+                [Fallback] Azure OpenAI tam thoi khong tra loi duoc, nhung da tim thay tai lieu noi bo lien quan.
+                Tai lieu chinh: {first.Title}
+                Noi dung lien quan: {preview}
+                Hay thu lai Copilot sau hoac mo ticket detail de support agent doi chieu.
+                """;
         }
 
         return $"Azure OpenAI chua san sang. Fallback local chi ho tro hoi trang thai ticket khi message chua ID 32 ky tu hex (vi du {TicketIds.Example}).";

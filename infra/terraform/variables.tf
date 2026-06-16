@@ -118,6 +118,43 @@ variable "log_retention_days" {
   default     = 30
 }
 
+variable "sql_admin_login" {
+  type        = string
+  description = "SQL Server administrator login for Azure SQL."
+  default     = "supportadmin"
+}
+
+variable "sql_database_sku" {
+  type        = string
+  description = "Azure SQL database SKU name."
+  default     = "Basic"
+}
+
+variable "frontend_image_digest" {
+  type        = string
+  description = "Immutable digest for the frontend image."
+}
+
+variable "gateway_image_digest" {
+  type        = string
+  description = "Immutable digest for the gateway image."
+}
+
+variable "ticket_service_image_digest" {
+  type        = string
+  description = "Immutable digest for the ticket service image."
+}
+
+variable "knowledge_service_image_digest" {
+  type        = string
+  description = "Immutable digest for the knowledge service image."
+}
+
+variable "ai_orchestrator_image_digest" {
+  type        = string
+  description = "Immutable digest for the AI orchestrator image."
+}
+
 variable "write_local_config" {
   type        = bool
   description = "Write ../../config/azure.local.json from Terraform outputs."

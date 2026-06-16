@@ -17,6 +17,8 @@ public sealed class McpDynamicPluginLoader
         _logger = logger;
     }
 
+    public bool IsEnabled => _gateway.IsEnabled;
+
     public async Task<McpToolCatalog> LoadCatalogAsync(CancellationToken cancellationToken = default)
     {
         if (_catalog is not null)
@@ -27,6 +29,13 @@ public sealed class McpDynamicPluginLoader
         {
             if (_catalog is not null)
                 return _catalog;
+
+            if (!_gateway.IsEnabled)
+            {
+                _catalog = new McpToolCatalog([]);
+                _logger.LogInformation("MCP tool server disabled by configuration; bo qua tools/list.");
+                return _catalog;
+            }
 
             var tools = await _gateway.ListToolsAsync(cancellationToken);
             _catalog = new McpToolCatalog(tools);

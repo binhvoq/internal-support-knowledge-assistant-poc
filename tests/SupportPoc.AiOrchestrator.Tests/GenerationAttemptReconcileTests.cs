@@ -188,9 +188,11 @@ public sealed class GenerationAttemptReconcileTests
     public async Task ResolveReconcileOutcomeAsync_uses_attempt_reader_before_deciding()
     {
         var attemptId = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
         var saga = NewSaga(attemptId, retryCount: 0);
+        saga.CurrentAttemptIssuedAt = now;
         var client = new StubReconcileClient(Reconcile(AutoSuggestionReconcileDecision.StillSuggestible));
-        var reader = new StubAttemptReader(RunningAttempt(attemptId, leaseUntil: Now.AddMinutes(5)));
+        var reader = new StubAttemptReader(RunningAttempt(attemptId, leaseUntil: now.AddMinutes(5), startedAt: now));
 
         var (outcome, _) = await ReconcileTicketSuggestionActivity.ResolveReconcileOutcomeAsync(
             saga,

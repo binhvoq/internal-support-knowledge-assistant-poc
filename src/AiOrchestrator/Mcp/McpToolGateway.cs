@@ -39,8 +39,13 @@ public sealed class McpToolGateway : IAsyncDisposable
         _logger = logger;
     }
 
+    public bool IsEnabled => _endpoints.IsMcpToolServerEnabled;
+
     public async Task<IReadOnlyList<McpClientTool>> ListToolsAsync(CancellationToken cancellationToken = default)
     {
+        if (!IsEnabled)
+            return [];
+
         var client = await GetClientAsync(cancellationToken);
         var tools = await client.ListToolsAsync(cancellationToken: cancellationToken);
         _logger.LogDebug("tools/list tra ve {Count} tool(s).", tools.Count);
@@ -49,7 +54,10 @@ public sealed class McpToolGateway : IAsyncDisposable
 
     public async Task<IReadOnlyList<McpToolPolicyDto>> ListToolPoliciesAsync(CancellationToken cancellationToken = default)
     {
-        var baseUrl = _endpoints.McpToolServer.TrimEnd('/');
+        if (!IsEnabled)
+            return [];
+
+        var baseUrl = _endpoints.McpToolServerValue ?? _endpoints.McpToolServer.TrimEnd('/');
         var httpClient = _httpClientFactory.CreateClient(HttpClientName);
         var policies = await httpClient.GetFromJsonAsync<IReadOnlyList<McpToolPolicyDto>>(
             $"{baseUrl}/internal/mcp/tool-policies",
@@ -76,6 +84,9 @@ public sealed class McpToolGateway : IAsyncDisposable
 
         try
         {
+            if (!IsEnabled)
+                throw new InvalidOperationException("MCP tool server disabled by configuration.");
+
             var client = await GetClientAsync(cancellationToken);
             var result = await client.CallToolAsync(toolName, arguments, cancellationToken: cancellationToken);
             return ExtractText(result);
@@ -101,6 +112,9 @@ public sealed class McpToolGateway : IAsyncDisposable
 
     private async Task<McpClient> GetClientAsync(CancellationToken cancellationToken)
     {
+        if (!IsEnabled)
+            throw new InvalidOperationException("MCP tool server disabled by configuration.");
+
         if (_client is not null) return _client;
 
         await _lock.WaitAsync(cancellationToken);
@@ -108,7 +122,7 @@ public sealed class McpToolGateway : IAsyncDisposable
         {
             if (_client is not null) return _client;
 
-            var baseUrl = _endpoints.McpToolServer.TrimEnd('/');
+            var baseUrl = _endpoints.McpToolServerValue ?? _endpoints.McpToolServer.TrimEnd('/');
             var httpClient = _httpClientFactory.CreateClient(HttpClientName);
             var transport = new HttpClientTransport(
                 new HttpClientTransportOptions

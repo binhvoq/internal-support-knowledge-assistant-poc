@@ -58,6 +58,20 @@ builder.Services.AddMassTransit(mt =>
 });
 
 var app = builder.Build();
+app.Use(async (context, next) =>
+{
+    if (HttpMethods.IsOptions(context.Request.Method))
+    {
+        context.Response.Headers.AccessControlAllowOrigin = context.Request.Headers.Origin.ToString();
+        context.Response.Headers.AccessControlAllowHeaders = "authorization,content-type";
+        context.Response.Headers.AccessControlAllowMethods = "GET,POST,DELETE,OPTIONS";
+        context.Response.Headers.AccessControlAllowCredentials = "true";
+        context.Response.StatusCode = StatusCodes.Status204NoContent;
+        return;
+    }
+
+    await next();
+});
 app.UseCors();
 if (entraEnabled)
     app.UseSupportPocEntraAuth();

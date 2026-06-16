@@ -1,5 +1,7 @@
 <Solution>
-  <Folder Name="/src/" />
+  <Folder Name="/src/">
+    <Project Path="src/Gateway/SupportPoc.Gateway.csproj" />
+  </Folder>
   <Folder Name="/src/AiOrchestrator/">
     <Project Path="src/AiOrchestrator/SupportPoc.AiOrchestrator.csproj" />
   </Folder>

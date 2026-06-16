@@ -43,7 +43,15 @@ public sealed class TicketSuggestionStateMachine : MassTransitStateMachine<Ticke
 
         InstanceState(x => x.CurrentState);
 
-        Event(() => TicketCreated, e => e.CorrelateById(m => m.Message.JobId));
+        Event(() => TicketCreated, e =>
+        {
+            e.CorrelateById(m => m.Message.JobId);
+            e.InsertOnInitial = true;
+            e.SetSagaFactory(ctx => new TicketSuggestionSaga
+            {
+                CorrelationId = ctx.Message.JobId
+            });
+        });
         Event(() => SuggestionGenerated, e =>
         {
             e.CorrelateById(m => m.Message.SagaId);

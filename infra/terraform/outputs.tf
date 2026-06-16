@@ -39,6 +39,22 @@ output "azure_local_config_path" {
   value = local.config_path
 }
 
+output "frontend_url" {
+  value = "https://${azurerm_container_app.gateway.ingress[0].fqdn}"
+}
+
+output "gateway_url" {
+  value = "https://${azurerm_container_app.gateway.ingress[0].fqdn}"
+}
+
+output "acr_login_server" {
+  value = azurerm_container_registry.main.login_server
+}
+
+output "sql_server_fqdn" {
+  value = azurerm_mssql_server.main.fully_qualified_domain_name
+}
+
 output "entra_tenant_id" {
   description = "Microsoft Entra tenant ID used for JWT validation and MSAL."
   value       = local.entra_enabled ? local.entra_config.tenantId : null
