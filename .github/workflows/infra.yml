@@ -1,0 +1,216 @@
+name: Infra
+
+on:
+  push:
+    branches:
+      - dev
+      - test
+      - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: choice
+        options:
+          - dev
+          - test
+          - prod
+        default: dev
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  TF_ROOT: infra/terraform
+  TFSTATE_RG: ${{ vars.AZURE_TFSTATE_RG || 'rg-projectthem5-tfstate' }}
+  TFSTATE_STORAGE: ${{ vars.AZURE_TFSTATE_STORAGE || 'stprojectthem5tfstate' }}
+  TFSTATE_CONTAINER: tfstate
+  ACR_NAME: ${{ vars.AZURE_ACR_NAME || 'supporttf01acr' }}
+  AZURE_LOCATION: ${{ vars.AZURE_LOCATION || 'southeastasia' }}
+  AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve target environment
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            target_env="${{ inputs.environment }}"
+          else
+            case "${GITHUB_REF_NAME}" in
+              main) target_env="prod" ;;
+              dev) target_env="dev" ;;
+              test) target_env="test" ;;
+              *) echo "Unsupported branch ${GITHUB_REF_NAME}"; exit 1 ;;
+            esac
+          fi
+
+          echo "TARGET_ENV=$target_env" >> "$GITHUB_ENV"
+          echo "TFVARS_FILE=envs/${target_env}.tfvars" >> "$GITHUB_ENV"
+          echo "BACKEND_KEY=${target_env}.terraform.tfstate" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ format('{"clientId":"{0}","clientSecret":"{1}","subscriptionId":"{2}","tenantId":"{3}"}', vars.AZURE_CLIENT_ID, vars.AZURE_CLIENT_SECRET, vars.AZURE_SUBSCRIPTION_ID, vars.AZURE_TENANT_ID) }}
+
+      - name: Bootstrap Terraform backend
+        shell: bash
+        working-directory: ${{ env.TF_ROOT }}
+        run: |
+          set -euo pipefail
+
+          az group create \
+            --name "$TFSTATE_RG" \
+            --location "$AZURE_LOCATION" \
+            -o none
+
+          if ! az storage account show --name "$TFSTATE_STORAGE" --resource-group "$TFSTATE_RG" >/dev/null 2>&1; then
+            az storage account create \
+              --name "$TFSTATE_STORAGE" \
+              --resource-group "$TFSTATE_RG" \
+              --location "$AZURE_LOCATION" \
+              --sku Standard_LRS \
+              --kind StorageV2 \
+              --allow-blob-public-access false \
+              -o none
+          fi
+
+          cat > backend.hcl <<EOF
+          storage_account_name = "$TFSTATE_STORAGE"
+          container_name       = "$TFSTATE_CONTAINER"
+          key                  = "$BACKEND_KEY"
+          use_azuread_auth     = true
+          EOF
+
+          backend_scope="/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$TFSTATE_RG/providers/Microsoft.Storage/storageAccounts/$TFSTATE_STORAGE"
+          for i in 1 2 3 4 5 6; do
+            if az role assignment create \
+              --assignee "${{ vars.AZURE_CLIENT_ID }}" \
+              --assignee-principal-type ServicePrincipal \
+              --role "Storage Blob Data Contributor" \
+              --scope "$backend_scope" \
+              -o none; then
+              break
+            fi
+            sleep 10
+          done
+
+          for i in 1 2 3 4 5 6; do
+            if az storage container create \
+              --account-name "$TFSTATE_STORAGE" \
+              --name "$TFSTATE_CONTAINER" \
+              --auth-mode login \
+              -o none; then
+              break
+            fi
+            sleep 10
+          done
+
+      - name: Terraform init
+        shell: bash
+        working-directory: ${{ env.TF_ROOT }}
+        run: |
+          set -euo pipefail
+          terraform init -reconfigure -backend-config=backend.hcl
+
+      - name: Terraform foundation apply
+        shell: bash
+        working-directory: ${{ env.TF_ROOT }}
+        run: |
+          set -euo pipefail
+          terraform apply \
+            -auto-approve \
+            -target=local_sensitive_file.azure_local_config[0] \
+            -var-file="${TFVARS_FILE}"
+
+      - name: Grant ACR push to pipeline identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          acr_scope=$(az acr show --name "$ACR_NAME" --query id -o tsv)
+          az role assignment create \
+            --assignee "${{ vars.AZURE_CLIENT_ID }}" \
+            --assignee-principal-type ServicePrincipal \
+            --role "AcrPush" \
+            --scope "$acr_scope" \
+            -o none || true
+
+      - name: Build and push images
+        shell: bash
+        run: |
+          set -euo pipefail
+          for spec in \
+            "frontend:docker/Dockerfile.frontend" \
+            "gateway:docker/Dockerfile.gateway" \
+            "ticket-service:docker/Dockerfile.ticket-service" \
+            "knowledge-service:docker/Dockerfile.knowledge-service" \
+            "ai-orchestrator:docker/Dockerfile.ai-orchestrator"
+          do
+            repo="${spec%%:*}"
+            file="${spec#*:}"
+            az acr build \
+              --registry "$ACR_NAME" \
+              --image "${repo}:${IMAGE_TAG}" \
+              --file "$file" \
+              .
+          done
+
+      - name: Write Terraform image digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          acr = os.environ["ACR_NAME"]
+          tag = os.environ["IMAGE_TAG"]
+          tf_root = Path(os.environ["TF_ROOT"])
+
+          repos = [
+              "frontend",
+              "gateway",
+              "ticket-service",
+              "knowledge-service",
+              "ai-orchestrator",
+          ]
+
+          payload = {}
+          for repo in repos:
+              raw = subprocess.check_output([
+                  "az", "acr", "repository", "show-manifests",
+                  "--name", acr,
+                  "--repository", repo,
+                  "--query", f"[?tags && contains(tags, '{tag}')].digest | [0]",
+                  "-o", "tsv",
+              ], text=True).strip()
+              if not raw:
+                  raise SystemExit(f"missing digest for {repo}:{tag}")
+              payload[f"{repo.replace('-', '_')}_image_digest"] = raw
+
+          out_path = tf_root / "generated.auto.tfvars.json"
+          out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+          print(f"wrote {out_path}")
+          PY
+
+      - name: Terraform full apply
+        shell: bash
+        working-directory: ${{ env.TF_ROOT }}
+        run: |
+          set -euo pipefail
+          terraform apply \
+            -auto-approve \
+            -var-file="${TFVARS_FILE}" \
+            -var-file=generated.auto.tfvars.json
