@@ -173,11 +173,22 @@ jobs:
           import_if_needed azurerm_log_analytics_workspace.main "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.OperationalInsights/workspaces/support-logs-${env_suffix}"
           import_if_needed azurerm_log_analytics_workspace.containerapps "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.OperationalInsights/workspaces/support-ca-logs-${env_suffix}"
           import_if_needed azurerm_application_insights.main "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Insights/components/support-insights-${env_suffix}"
+          import_if_needed azurerm_container_registry.main "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.ContainerRegistry/registries/support${env_suffix}acr"
           import_if_needed azurerm_cognitive_account.openai_chat "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.CognitiveServices/accounts/support-oai-chat-${env_suffix}"
           import_if_needed azurerm_cognitive_account.openai_embed "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.CognitiveServices/accounts/support-oai-embed-${env_suffix}"
           import_if_needed azurerm_cognitive_deployment.chat "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.CognitiveServices/accounts/support-oai-chat-${env_suffix}/deployments/gpt-4.1-mini"
           import_if_needed azurerm_cognitive_deployment.embedding "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.CognitiveServices/accounts/support-oai-embed-${env_suffix}/deployments/text-embedding-3-small"
           import_if_needed azurerm_container_app_environment.main "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.App/managedEnvironments/support-cae-${env_suffix}"
+
+      - name: Terraform ACR bootstrap
+        shell: bash
+        working-directory: ${{ env.TF_ROOT }}
+        run: |
+          set -euo pipefail
+          terraform apply \
+            -auto-approve \
+            -target=azurerm_container_registry.main \
+            -var-file="${TFVARS_FILE}"
 
       - name: Terraform foundation apply
         shell: bash
