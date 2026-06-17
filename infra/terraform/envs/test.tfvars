@@ -19,7 +19,7 @@ spa_redirect_uris = [
 ]
 
 bootstrap_user_id = "c0656246-0907-4c6f-8871-25b622341cb3"
-enable_entra_identity = false
+enable_entra_identity = true
 
 tags = {
   app         = "internal-support"
