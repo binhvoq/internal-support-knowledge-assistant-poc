@@ -64,6 +64,7 @@ jobs:
             *) echo "Unsupported environment ${target_env}"; exit 1 ;;
           esac
           echo "RESOURCE_GROUP_NAME=$resource_group_name" >> "$GITHUB_ENV"
+          echo "ACR_NAME=support${target_env}01acr" >> "$GITHUB_ENV"
           echo "TFVARS_FILE=envs/${target_env}.tfvars" >> "$GITHUB_ENV"
           echo "BACKEND_KEY=${target_env}.terraform.tfstate" >> "$GITHUB_ENV"
           echo "IMAGE_TAG=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
@@ -149,15 +150,34 @@ jobs:
         working-directory: ${{ env.TF_ROOT }}
         run: |
           set -euo pipefail
-          if terraform state list 2>/dev/null | grep -qx 'azurerm_resource_group.main'; then
-            echo "Resource group already tracked in state"
-            exit 0
-          fi
+          import_if_needed() {
+            local address="$1"
+            local resource_id="$2"
+            if terraform state list 2>/dev/null | grep -qx "$address"; then
+              return 0
+            fi
+            if az resource show --ids "$resource_id" >/dev/null 2>&1; then
+              terraform import -var-file="${TFVARS_FILE}" "$address" "$resource_id" || true
+            fi
+          }
 
+          env_suffix="${TARGET_ENV}01"
           rg_id="/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}"
-          if az group exists --name "$RESOURCE_GROUP_NAME"; then
-            terraform import -var-file="${TFVARS_FILE}" azurerm_resource_group.main "$rg_id"
-          fi
+          import_if_needed azurerm_resource_group.main "$rg_id"
+          import_if_needed azurerm_storage_account.docs "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Storage/storageAccounts/supportstore${env_suffix}"
+          import_if_needed azurerm_servicebus_namespace.bus "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.ServiceBus/namespaces/support-bus-${env_suffix}"
+          import_if_needed azurerm_servicebus_namespace_authorization_rule.app "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.ServiceBus/namespaces/support-bus-${env_suffix}/authorizationRules/support-app"
+          import_if_needed azurerm_servicebus_topic.events "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.ServiceBus/namespaces/support-bus-${env_suffix}/topics/support-events"
+          import_if_needed azurerm_servicebus_subscription.ai_orchestrator "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.ServiceBus/namespaces/support-bus-${env_suffix}/topics/support-events/subscriptions/ai-orchestrator"
+          import_if_needed azurerm_search_service.knowledge "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Search/searchServices/support-search-${env_suffix}"
+          import_if_needed azurerm_log_analytics_workspace.main "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.OperationalInsights/workspaces/support-logs-${env_suffix}"
+          import_if_needed azurerm_log_analytics_workspace.containerapps "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.OperationalInsights/workspaces/support-ca-logs-${env_suffix}"
+          import_if_needed azurerm_application_insights.main "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Insights/components/support-insights-${env_suffix}"
+          import_if_needed azurerm_cognitive_account.openai_chat "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.CognitiveServices/accounts/support-oai-chat-${env_suffix}"
+          import_if_needed azurerm_cognitive_account.openai_embed "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.CognitiveServices/accounts/support-oai-embed-${env_suffix}"
+          import_if_needed azurerm_cognitive_deployment.chat "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.CognitiveServices/accounts/support-oai-chat-${env_suffix}/deployments/gpt-4.1-mini"
+          import_if_needed azurerm_cognitive_deployment.embedding "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.CognitiveServices/accounts/support-oai-embed-${env_suffix}/deployments/text-embedding-3-small"
+          import_if_needed azurerm_container_app_environment.main "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.App/managedEnvironments/support-cae-${env_suffix}"
 
       - name: Terraform foundation apply
         shell: bash
