@@ -40,11 +40,15 @@ output "azure_local_config_path" {
 }
 
 output "frontend_url" {
-  value = "https://${azurerm_container_app.gateway.ingress[0].fqdn}"
+  value = local.gateway_public_url
 }
 
 output "gateway_url" {
-  value = "https://${azurerm_container_app.gateway.ingress[0].fqdn}"
+  value = local.gateway_public_url
+}
+
+output "gateway_public_url" {
+  value = local.gateway_public_url
 }
 
 output "acr_login_server" {

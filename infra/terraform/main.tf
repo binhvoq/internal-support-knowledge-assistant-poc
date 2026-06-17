@@ -26,7 +26,11 @@ terraform {
 }
 
 provider "azurerm" {
-  features {}
+  features {
+    resource_group {
+      prevent_deletion_if_contains_resources = false
+    }
+  }
 }
 
 provider "azuread" {
@@ -37,6 +41,11 @@ provider "azuread" {
 locals {
   name_prefix                   = lower(replace(var.prefix, "-", ""))
   suffix                        = lower(replace(var.suffix, "-", ""))
+  frontend_name                 = "${var.prefix}-web-${var.suffix}"
+  ticket_service_name           = "${var.prefix}-ticket-${var.suffix}"
+  knowledge_service_name        = "${var.prefix}-knowledge-${var.suffix}"
+  ai_orchestrator_name          = "${var.prefix}-ai-${var.suffix}"
+  gateway_name                  = "${var.prefix}-gateway-${var.suffix}"
   storage_account_name          = substr("${local.name_prefix}store${local.suffix}", 0, 24)
   service_bus_name              = "${var.prefix}-bus-${var.suffix}"
   search_name                   = "${var.prefix}-search-${var.suffix}"
@@ -46,7 +55,9 @@ locals {
   container_apps_env            = "${var.prefix}-cae-${var.suffix}"
   container_apps_default_domain = azurerm_container_app_environment.main.default_domain
   config_path                   = abspath("${path.module}/../../config/azure.local.json")
-  gateway_frontend_url          = "https://${azurerm_container_app.frontend.name}.internal.${local.container_apps_default_domain}"
+  gateway_frontend_url          = "https://${local.frontend_name}.internal.${local.container_apps_default_domain}"
+  gateway_public_url            = "https://${local.gateway_name}.${local.container_apps_default_domain}/"
+  spa_redirect_uris_effective   = distinct(concat(var.spa_redirect_uris, [local.gateway_public_url]))
 
   azure_local_config = merge({
     resourceGroup = azurerm_resource_group.main.name
@@ -296,7 +307,7 @@ resource "azurerm_role_assignment" "containerapps_sql" {
 }
 
 resource "azurerm_container_app" "ticket_service" {
-  name                         = "${var.prefix}-ticket-${var.suffix}"
+  name                         = local.ticket_service_name
   resource_group_name          = azurerm_resource_group.main.name
   container_app_environment_id = azurerm_container_app_environment.main.id
   revision_mode                = "Single"
@@ -383,7 +394,7 @@ resource "azurerm_container_app" "ticket_service" {
 }
 
 resource "azurerm_container_app" "knowledge_service" {
-  name                         = "${var.prefix}-knowledge-${var.suffix}"
+  name                         = local.knowledge_service_name
   resource_group_name          = azurerm_resource_group.main.name
   container_app_environment_id = azurerm_container_app_environment.main.id
   revision_mode                = "Single"
@@ -490,7 +501,7 @@ resource "azurerm_container_app" "knowledge_service" {
 }
 
 resource "azurerm_container_app" "ai_orchestrator" {
-  name                         = "${var.prefix}-ai-${var.suffix}"
+  name                         = local.ai_orchestrator_name
   resource_group_name          = azurerm_resource_group.main.name
   container_app_environment_id = azurerm_container_app_environment.main.id
   revision_mode                = "Single"
@@ -609,7 +620,7 @@ resource "azurerm_container_app" "ai_orchestrator" {
 }
 
 resource "azurerm_container_app" "frontend" {
-  name                         = "${var.prefix}-web-${var.suffix}"
+  name                         = local.frontend_name
   resource_group_name          = azurerm_resource_group.main.name
   container_app_environment_id = azurerm_container_app_environment.main.id
   revision_mode                = "Single"
@@ -672,7 +683,7 @@ resource "azurerm_container_app" "frontend" {
 }
 
 resource "azurerm_container_app" "gateway" {
-  name                         = "${var.prefix}-gateway-${var.suffix}"
+  name                         = local.gateway_name
   resource_group_name          = azurerm_resource_group.main.name
   container_app_environment_id = azurerm_container_app_environment.main.id
   revision_mode                = "Single"
