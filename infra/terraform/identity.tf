@@ -67,7 +67,7 @@ locals {
     spa = {
       displayName  = azuread_application.spa[0].display_name
       clientId     = azuread_application.spa[0].client_id
-      redirectUris = var.spa_redirect_uris
+      redirectUris = local.spa_redirect_uris_effective
     }
     mcpService = {
       displayName   = azuread_application.mcp_service[0].display_name
@@ -155,7 +155,7 @@ resource "azuread_application" "spa" {
   owners           = [data.azuread_client_config.current.object_id]
 
   single_page_application {
-    redirect_uris = var.spa_redirect_uris
+    redirect_uris = local.spa_redirect_uris_effective
   }
 
   required_resource_access {

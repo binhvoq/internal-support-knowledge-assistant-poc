@@ -1,0 +1,260 @@
+name: Infra
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: environment
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  TF_ROOT: infra/terraform
+  TFSTATE_RG: ${{ vars.AZURE_TFSTATE_RG || 'rg-projectthem5-tfstate' }}
+  TFSTATE_STORAGE: ${{ vars.AZURE_TFSTATE_STORAGE || 'stprojectthem5tfstate' }}
+  TFSTATE_CONTAINER: tfstate
+  ACR_NAME: ${{ vars.AZURE_ACR_NAME || 'supporttf01acr' }}
+  AZURE_LOCATION: ${{ vars.AZURE_LOCATION || 'southeastasia' }}
+  AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    concurrency: infra-${{ inputs.environment }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Resolve target environment
+        shell: bash
+        run: |
+          target_env="${{ inputs.environment }}"
+
+          echo "TARGET_ENV=$target_env" >> "$GITHUB_ENV"
+          echo "RESOURCE_GROUP_NAME=rg-internal-support-${target_env}" >> "$GITHUB_ENV"
+          echo "ACR_NAME=support${target_env}01acr" >> "$GITHUB_ENV"
+          echo "TFVARS_FILE=envs/${target_env}.tfvars" >> "$GITHUB_ENV"
+          echo "BACKEND_KEY=${target_env}.terraform.tfstate" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      - name: Prepare Azure creds
+        id: azure_creds
+        shell: bash
+        run: |
+          set -euo pipefail
+          json=$(cat <<EOF
+          {"clientId":"${{ vars.AZURE_CLIENT_ID }}","clientSecret":"${{ vars.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ vars.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ vars.AZURE_TENANT_ID }}"}
+          EOF
+          )
+          echo "creds=$json" >> "$GITHUB_OUTPUT"
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ steps.azure_creds.outputs.creds }}
+
+      - name: Bootstrap Terraform backend
+        shell: bash
+        working-directory: ${{ env.TF_ROOT }}
+        run: |
+          set -euo pipefail
+
+          az group create \
+            --name "$TFSTATE_RG" \
+            --location "$AZURE_LOCATION" \
+            -o none
+
+          if ! az storage account show --name "$TFSTATE_STORAGE" --resource-group "$TFSTATE_RG" >/dev/null 2>&1; then
+            az storage account create \
+              --name "$TFSTATE_STORAGE" \
+              --resource-group "$TFSTATE_RG" \
+              --location "$AZURE_LOCATION" \
+              --sku Standard_LRS \
+              --kind StorageV2 \
+              --allow-blob-public-access false \
+              -o none
+          fi
+
+          cat > backend.hcl <<EOF
+          storage_account_name = "$TFSTATE_STORAGE"
+          container_name       = "$TFSTATE_CONTAINER"
+          key                  = "$BACKEND_KEY"
+          use_azuread_auth     = true
+          EOF
+
+          backend_scope="/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$TFSTATE_RG/providers/Microsoft.Storage/storageAccounts/$TFSTATE_STORAGE"
+          for i in 1 2 3 4 5 6; do
+            if az role assignment create \
+              --assignee "${{ vars.AZURE_CLIENT_ID }}" \
+              --assignee-principal-type ServicePrincipal \
+              --role "Storage Blob Data Contributor" \
+              --scope "$backend_scope" \
+              -o none; then
+              break
+            fi
+            sleep 10
+          done
+
+          for i in 1 2 3 4 5 6; do
+            if az storage container create \
+              --account-name "$TFSTATE_STORAGE" \
+              --name "$TFSTATE_CONTAINER" \
+              --auth-mode login \
+              -o none; then
+              break
+            fi
+            sleep 10
+          done
+
+      - name: Terraform init
+        shell: bash
+        working-directory: ${{ env.TF_ROOT }}
+        run: |
+          set -euo pipefail
+          terraform init -reconfigure -backend-config=backend.hcl
+
+      - name: Import resource group if needed
+        shell: bash
+        working-directory: ${{ env.TF_ROOT }}
+        run: |
+          set -euo pipefail
+          import_if_needed() {
+            local address="$1"
+            local resource_id="$2"
+            if terraform state list 2>/dev/null | grep -qx "$address"; then
+              return 0
+            fi
+            if az resource show --ids "$resource_id" >/dev/null 2>&1; then
+              terraform import -var-file="${TFVARS_FILE}" "$address" "$resource_id" || true
+            fi
+          }
+
+          env_suffix="${TARGET_ENV}01"
+          rg_id="/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}"
+          import_if_needed azurerm_resource_group.main "$rg_id"
+          import_if_needed azurerm_storage_account.docs "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Storage/storageAccounts/supportstore${env_suffix}"
+          import_if_needed azurerm_servicebus_namespace.bus "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.ServiceBus/namespaces/support-bus-${env_suffix}"
+          import_if_needed azurerm_servicebus_namespace_authorization_rule.app "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.ServiceBus/namespaces/support-bus-${env_suffix}/authorizationRules/support-app"
+          import_if_needed azurerm_servicebus_topic.events "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.ServiceBus/namespaces/support-bus-${env_suffix}/topics/support-events"
+          import_if_needed azurerm_servicebus_subscription.ai_orchestrator "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.ServiceBus/namespaces/support-bus-${env_suffix}/topics/support-events/subscriptions/ai-orchestrator"
+          import_if_needed azurerm_search_service.knowledge "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Search/searchServices/support-search-${env_suffix}"
+          import_if_needed azurerm_log_analytics_workspace.main "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.OperationalInsights/workspaces/support-logs-${env_suffix}"
+          import_if_needed azurerm_log_analytics_workspace.containerapps "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.OperationalInsights/workspaces/support-ca-logs-${env_suffix}"
+          import_if_needed azurerm_application_insights.main "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Insights/components/support-insights-${env_suffix}"
+          import_if_needed azurerm_container_registry.main "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.ContainerRegistry/registries/support${env_suffix}acr"
+          import_if_needed azurerm_cognitive_account.openai_chat "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.CognitiveServices/accounts/support-oai-chat-${env_suffix}"
+          import_if_needed azurerm_cognitive_account.openai_embed "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.CognitiveServices/accounts/support-oai-embed-${env_suffix}"
+          import_if_needed azurerm_cognitive_deployment.chat "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.CognitiveServices/accounts/support-oai-chat-${env_suffix}/deployments/gpt-4.1-mini"
+          import_if_needed azurerm_cognitive_deployment.embedding "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.CognitiveServices/accounts/support-oai-embed-${env_suffix}/deployments/text-embedding-3-small"
+          import_if_needed azurerm_container_app_environment.main "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.App/managedEnvironments/support-cae-${env_suffix}"
+
+      - name: Terraform ACR bootstrap
+        shell: bash
+        working-directory: ${{ env.TF_ROOT }}
+        run: |
+          set -euo pipefail
+          terraform apply \
+            -auto-approve \
+            -target=azurerm_container_registry.main \
+            -var-file="${TFVARS_FILE}"
+
+      - name: Terraform foundation apply
+        shell: bash
+        working-directory: ${{ env.TF_ROOT }}
+        run: |
+          set -euo pipefail
+          terraform apply \
+            -auto-approve \
+            -target=local_sensitive_file.azure_local_config[0] \
+            -var-file="${TFVARS_FILE}"
+
+      - name: Grant ACR push to pipeline identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          acr_scope=$(az acr show --name "$ACR_NAME" --query id -o tsv)
+          az role assignment create \
+            --assignee "${{ vars.AZURE_CLIENT_ID }}" \
+            --assignee-principal-type ServicePrincipal \
+            --role "AcrPush" \
+            --scope "$acr_scope" \
+            -o none || true
+
+      - name: Build and push images
+        shell: bash
+        run: |
+          set -euo pipefail
+          for spec in \
+            "frontend:docker/Dockerfile.frontend" \
+            "gateway:docker/Dockerfile.gateway" \
+            "ticket-service:docker/Dockerfile.ticket-service" \
+            "knowledge-service:docker/Dockerfile.knowledge-service" \
+            "ai-orchestrator:docker/Dockerfile.ai-orchestrator"
+          do
+            repo="${spec%%:*}"
+            file="${spec#*:}"
+            az acr build \
+              --registry "$ACR_NAME" \
+              --image "${repo}:${IMAGE_TAG}" \
+              --file "$file" \
+              .
+          done
+
+      - name: Write Terraform image digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          acr = os.environ["ACR_NAME"]
+          tag = os.environ["IMAGE_TAG"]
+          tf_root = Path(os.environ["TF_ROOT"])
+
+          repos = [
+              "frontend",
+              "gateway",
+              "ticket-service",
+              "knowledge-service",
+              "ai-orchestrator",
+          ]
+
+          payload = {}
+          for repo in repos:
+              raw = subprocess.check_output([
+                  "az", "acr", "repository", "show-manifests",
+                  "--name", acr,
+                  "--repository", repo,
+                  "--query", f"[?tags && contains(tags, '{tag}')].digest | [0]",
+                  "-o", "tsv",
+              ], text=True).strip()
+              if not raw:
+                  raise SystemExit(f"missing digest for {repo}:{tag}")
+              payload[f"{repo.replace('-', '_')}_image_digest"] = raw
+
+          out_path = tf_root / "generated.auto.tfvars.json"
+          out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+          print(f"wrote {out_path}")
+          PY
+
+      - name: Terraform full apply
+        shell: bash
+        working-directory: ${{ env.TF_ROOT }}
+        run: |
+          set -euo pipefail
+          terraform apply \
+            -auto-approve \
+            -var-file="${TFVARS_FILE}" \
+            -var-file=generated.auto.tfvars.json
