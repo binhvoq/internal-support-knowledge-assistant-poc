@@ -4,7 +4,7 @@ This repo now uses four clear layers:
 
 - `CI`: branch-based validation on pushes and pull requests.
 - `Infra`: manual Terraform bootstrap for environment/state setup.
-- `Deploy Nonprod`: automatic app deploys on push to `dev` and `test`, gated by the matching GitHub Environment.
+- `Deploy Nonprod`: automatic app deploys on push to `dev` and `test`, without a GitHub Environment gate.
 - `CD`: automatic app deploys on push to `main`, with `prod` protection.
 
 ## What lives where
@@ -25,14 +25,15 @@ This repo now uses four clear layers:
 
 ## Environment model
 
-- `dev`, `test`, and `prod` are all protected environments.
+- `dev` and `test` are meant for automatic app deploys.
+- `prod` stays protected.
 - Branch protection still guards source changes.
 
 ## Why this is better
 
 - Small UI or service changes no longer rebuild every image.
 - App deploys no longer run a full Terraform apply when only one service changed.
-- Dev/test/prod all go through the intended protection gate.
+- Dev/test no longer depend on a manual GitHub Environment approval gate.
 - Infra bootstrap stays a separate explicit action instead of being mixed into every deploy.
 
 ## Operational rule

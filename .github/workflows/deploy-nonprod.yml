@@ -30,7 +30,6 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: ${{ github.ref_name }}
     concurrency: deploy-${{ github.ref_name }}
 
     steps:
