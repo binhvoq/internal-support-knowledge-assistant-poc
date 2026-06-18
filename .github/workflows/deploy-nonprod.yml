@@ -9,6 +9,7 @@ on:
       - frontend/**
       - src/**
       - docker/**
+      - scripts/**
       - "*.sln"
       - Directory.Build.*
       - global.json
