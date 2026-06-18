@@ -1,0 +1,4 @@
+# Keep workflow and infra changes under explicit review.
+/.github/workflows/ @binhvoq
+/infra/terraform/ @binhvoq
+/docs/ @binhvoq

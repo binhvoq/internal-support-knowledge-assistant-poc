@@ -1,22 +1,12 @@
 name: Infra
 
 on:
-  push:
-    branches:
-      - dev
-      - test
-      - main
   workflow_dispatch:
     inputs:
       environment:
         description: Target environment
         required: true
-        type: choice
-        options:
-          - dev
-          - test
-          - prod
-        default: dev
+        type: environment
 
 permissions:
   contents: read
@@ -34,6 +24,8 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    concurrency: infra-${{ inputs.environment }}
 
     steps:
       - name: Checkout
@@ -45,25 +37,10 @@ jobs:
       - name: Resolve target environment
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            target_env="${{ inputs.environment }}"
-          else
-            case "${GITHUB_REF_NAME}" in
-              main) target_env="prod" ;;
-              dev) target_env="dev" ;;
-              test) target_env="test" ;;
-              *) echo "Unsupported branch ${GITHUB_REF_NAME}"; exit 1 ;;
-            esac
-          fi
+          target_env="${{ inputs.environment }}"
 
           echo "TARGET_ENV=$target_env" >> "$GITHUB_ENV"
-          case "$target_env" in
-            dev) resource_group_name="rg-internal-support-dev" ;;
-            test) resource_group_name="rg-internal-support-test" ;;
-            prod) resource_group_name="rg-internal-support-prod" ;;
-            *) echo "Unsupported environment ${target_env}"; exit 1 ;;
-          esac
-          echo "RESOURCE_GROUP_NAME=$resource_group_name" >> "$GITHUB_ENV"
+          echo "RESOURCE_GROUP_NAME=rg-internal-support-${target_env}" >> "$GITHUB_ENV"
           echo "ACR_NAME=support${target_env}01acr" >> "$GITHUB_ENV"
           echo "TFVARS_FILE=envs/${target_env}.tfvars" >> "$GITHUB_ENV"
           echo "BACKEND_KEY=${target_env}.terraform.tfstate" >> "$GITHUB_ENV"
