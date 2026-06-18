@@ -275,6 +275,39 @@ def main() -> int:
         identity_principal_id,
     )
 
+    foundation_imports = [
+        ("azurerm_storage_account.docs", f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.Storage/storageAccounts/supportstore{env_suffix}"),
+        ("azurerm_servicebus_namespace.bus", f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.ServiceBus/namespaces/support-bus-{env_suffix}"),
+        ("azurerm_servicebus_namespace_authorization_rule.app", f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.ServiceBus/namespaces/support-bus-{env_suffix}/authorizationRules/support-app"),
+        ("azurerm_servicebus_topic.events", f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.ServiceBus/namespaces/support-bus-{env_suffix}/topics/support-events"),
+        ("azurerm_servicebus_subscription.ai_orchestrator", f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.ServiceBus/namespaces/support-bus-{env_suffix}/topics/support-events/subscriptions/ai-orchestrator"),
+        ("azurerm_search_service.knowledge", f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.Search/searchServices/support-search-{env_suffix}"),
+        ("azurerm_log_analytics_workspace.main", f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.OperationalInsights/workspaces/support-logs-{env_suffix}"),
+        ("azurerm_log_analytics_workspace.containerapps", f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.OperationalInsights/workspaces/support-ca-logs-{env_suffix}"),
+        ("azurerm_application_insights.main", f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.Insights/components/support-insights-{env_suffix}"),
+        ("azurerm_cognitive_account.openai_chat", f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.CognitiveServices/accounts/support-oai-chat-{env_suffix}"),
+        ("azurerm_cognitive_account.openai_embed", f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.CognitiveServices/accounts/support-oai-embed-{env_suffix}"),
+        ("azurerm_cognitive_deployment.chat", f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.CognitiveServices/accounts/support-oai-chat-{env_suffix}/deployments/gpt-4.1-mini"),
+        ("azurerm_cognitive_deployment.embedding", f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.CognitiveServices/accounts/support-oai-embed-{env_suffix}/deployments/text-embedding-3-small"),
+        ("azurerm_container_app_environment.main", f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.App/managedEnvironments/support-cae-{env_suffix}"),
+        ("azurerm_storage_container.knowledge_docs", f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.Storage/storageAccounts/supportstore{env_suffix}/blobServices/default/containers/knowledge-docs"),
+        ("azurerm_mssql_server.main", f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.Sql/servers/support-sql-{env_suffix}"),
+        ("azurerm_mssql_firewall_rule.allow_azure", f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.Sql/servers/support-sql-{env_suffix}/firewallRules/AllowAzureServices"),
+        ("azurerm_mssql_database.tickets", f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.Sql/servers/support-sql-{env_suffix}/databases/supportpoc_tickets"),
+        ("azurerm_mssql_database.knowledge", f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.Sql/servers/support-sql-{env_suffix}/databases/supportpoc_knowledge"),
+        ("azurerm_mssql_database.orchestrator", f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.Sql/servers/support-sql-{env_suffix}/databases/supportpoc_orchestrator"),
+    ]
+    for address, resource_id in foundation_imports:
+        import_if_needed(tf_root, env["TFVARS_FILE"], address, resource_id)
+
+    for repo in REPOS:
+        import_if_needed(
+            tf_root,
+            env["TFVARS_FILE"],
+            SERVICE_RULES[repo]["resource"],
+            f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.App/containerApps/{repo_to_container_app_name(repo, env_suffix)}",
+        )
+
     build_digests: dict[str, str] = {}
     for repo in repos:
         build_digests[repo] = build_image(env["ACR_NAME"], repo, env["HEAD_SHA"][:7])
