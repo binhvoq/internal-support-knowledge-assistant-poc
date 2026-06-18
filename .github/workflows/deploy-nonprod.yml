@@ -1,9 +1,10 @@
-name: CD
+name: Deploy Nonprod
 
 on:
   push:
     branches:
-      - main
+      - dev
+      - test
     paths:
       - frontend/**
       - src/**
@@ -29,8 +30,7 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: prod
-    concurrency: deploy-prod
+    concurrency: deploy-${{ github.ref_name }}
 
     steps:
       - name: Checkout
@@ -44,10 +44,20 @@ jobs:
       - name: Resolve target environment
         shell: bash
         run: |
-          echo "TARGET_ENV=prod" >> "$GITHUB_ENV"
-          echo "RESOURCE_GROUP_NAME=rg-internal-support-prod" >> "$GITHUB_ENV"
-          echo "TFVARS_FILE=envs/prod.tfvars" >> "$GITHUB_ENV"
-          echo "BACKEND_KEY=prod.terraform.tfstate" >> "$GITHUB_ENV"
+          case "${GITHUB_REF_NAME}" in
+            dev|test)
+              target_env="${GITHUB_REF_NAME}"
+              ;;
+            *)
+              echo "Unsupported branch ${GITHUB_REF_NAME}" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "TARGET_ENV=$target_env" >> "$GITHUB_ENV"
+          echo "RESOURCE_GROUP_NAME=rg-internal-support-${target_env}" >> "$GITHUB_ENV"
+          echo "TFVARS_FILE=envs/${target_env}.tfvars" >> "$GITHUB_ENV"
+          echo "BACKEND_KEY=${target_env}.terraform.tfstate" >> "$GITHUB_ENV"
 
       - name: Prepare Azure creds
         id: azure_creds
