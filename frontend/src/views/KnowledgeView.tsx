@@ -148,6 +148,7 @@ export function KnowledgeView() {
       <div className="knowledge-grid">
         <SectionCard>
           <h2>Upload policy PDF</h2>
+          <p className="section-note">PDF sẽ được ingest vào Azure Search sau khi upload xong.</p>
           <label className="dropzone">
             <Icon name="upload" />
             <strong>{pdfFile ? pdfFile.name : 'Kéo thả file PDF vào đây hoặc bấm để chọn file'}</strong>
