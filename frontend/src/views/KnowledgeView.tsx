@@ -23,8 +23,13 @@ export function KnowledgeView() {
   const [error, setError] = useState('');
   const [uploading, setUploading] = useState(false);
 
-  const readyCount = docs.filter((document) => document.ingestionStatus === 'Ready').length;
-  const failedCount = docs.filter((document) => document.ingestionStatus === 'Failed').length;
+  const authBlocked = auth.configured && (!auth.ready || !auth.account);
+  const visibleDocs = authBlocked ? [] : docs;
+  const readyCount = visibleDocs.filter((document) => document.ingestionStatus === 'Ready').length;
+  const failedCount = visibleDocs.filter((document) => document.ingestionStatus === 'Failed').length;
+  const visibleReindexStatus = authBlocked ? 'Idle' : reindexStatus;
+  const visibleMessage = authBlocked ? '' : message;
+  const visibleError = authBlocked ? '' : error;
 
   const load = async () => {
     setDocs(await api.listDocuments());
@@ -33,12 +38,7 @@ export function KnowledgeView() {
   };
 
   useEffect(() => {
-    if (auth.configured && (!auth.ready || !auth.account)) {
-      setDocs([]);
-      setReindexStatus('Idle');
-      setError('');
-      return;
-    }
+    if (authBlocked) return;
 
     void Promise.all([api.listDocuments(), api.reindexStatus()])
       .then(([documents, status]) => {
@@ -47,7 +47,7 @@ export function KnowledgeView() {
         setError('');
       })
       .catch((e) => setError((e as Error).message));
-  }, [auth.configured, auth.ready, auth.account]);
+  }, [authBlocked]);
 
   const addDoc = async () => {
     setError('');
@@ -139,12 +139,12 @@ export function KnowledgeView() {
       <AuthRequiredBanner action="quản lý tài liệu (cần role Support.KnowledgeAdmin)" />
       <div className="kpi-grid">
         <Kpi icon="file" value={readyCount} label="Ready" />
-        <Kpi icon="file" value={docs.length} label="Total docs" />
+        <Kpi icon="file" value={visibleDocs.length} label="Total docs" />
         <Kpi icon="lock" value={failedCount} label="Failed" tone="danger" />
-        <Kpi icon="database" value={reindexStatus} label="Index status" tone="success" />
+        <Kpi icon="database" value={visibleReindexStatus} label="Index status" tone="success" />
       </div>
-      {message && <p className="success panel-message">{message}</p>}
-      {error && <p className="error panel-error">{error}</p>}
+      {visibleMessage && <p className="success panel-message">{visibleMessage}</p>}
+      {visibleError && <p className="error panel-error">{visibleError}</p>}
       <div className="knowledge-grid">
         <SectionCard>
           <h2>Upload policy PDF</h2>
@@ -213,11 +213,11 @@ export function KnowledgeView() {
       </div>
       <SectionCard>
         <h2>File AI đã đọc</h2>
-        {docs.length === 0 ? (
+        {visibleDocs.length === 0 ? (
           <EmptyState title="Không có document" text="Tài liệu ingest sẽ xuất hiện tại đây." />
         ) : (
           <div className="knowledge-list">
-            {docs.map((document) => (
+            {visibleDocs.map((document) => (
               <div className="knowledge-item" key={document.id}>
                 <Icon name="file" />
                 <div>
