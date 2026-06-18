@@ -9,3 +9,5 @@ window.__APP_CONFIG__ = {
   VITE_AAD_API_SCOPE: "${VITE_AAD_API_SCOPE:-}"
 };
 EOF
+
+exec nginx -g 'daemon off;'
