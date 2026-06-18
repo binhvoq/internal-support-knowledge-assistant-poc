@@ -127,7 +127,7 @@ def detect_repos(changed_files: list[str]) -> set[str]:
 
 
 def terraform_state_list(tf_root: Path) -> set[str]:
-    result = run(["terraform", "state", "list"], cwd=tf_root, check=False)
+    result = run(["terraform", "state", "list"], cwd=tf_root, check=False, capture=True)
     if result.returncode != 0:
         return set()
     return {line.strip() for line in result.stdout.splitlines() if line.strip()}
