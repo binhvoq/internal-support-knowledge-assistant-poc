@@ -3,6 +3,8 @@ import { Icon } from '../components/Icon';
 import { SectionCard } from '../components/SectionCard';
 
 export function LoginView() {
+  const loginHeading = 'Đăng nhập Entra ID';
+
   return (
     <div className="login-wrap">
       <SectionCard className="login-card">
@@ -15,7 +17,7 @@ export function LoginView() {
             <i />
           </span>
         </div>
-        <h1>Đăng nhập Entra ID</h1>
+        <h1>{loginHeading}</h1>
         <p className="lead">Đăng nhập bằng tài khoản Microsoft để truy cập hệ thống hỗ trợ nội bộ.</p>
         <AuthTestPanel />
         <div className="info-callout">
