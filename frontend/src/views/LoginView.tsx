@@ -15,7 +15,7 @@ export function LoginView() {
             <i />
           </span>
         </div>
-        <h1>Đăng nhập Entra ID 123</h1>
+        <h1>Đăng nhập Entra ID</h1>
         <p className="lead">Đăng nhập bằng tài khoản Microsoft để truy cập hệ thống hỗ trợ nội bộ.</p>
         <AuthTestPanel />
         <div className="info-callout">

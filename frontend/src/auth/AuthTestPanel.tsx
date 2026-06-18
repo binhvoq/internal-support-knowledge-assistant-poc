@@ -109,7 +109,7 @@ export function AuthTestPanel() {
   if (!configured) {
     return (
       <div className="card auth-panel">
-        <h2>Đăng nhập Entra ID 123</h2>
+        <h2>Đăng nhập Entra ID</h2>
         <p>
           Thiếu biến môi trường MSAL. Cấu hình Entra trực tiếp rồi chạy frontend:
         </p>
@@ -127,7 +127,7 @@ export function AuthTestPanel() {
 
   return (
     <div className="card auth-panel">
-      <h2>Đăng nhập Entra ID 123 (frontend)</h2>
+      <h2>Đăng nhập Entra ID (frontend)</h2>
       <p className="muted">
         Chỉ kiểm tra MSAL + gọi API có Bearer khi đã đăng nhập. Scope:{' '}
         <code>{apiScope || '(chưa set)'}</code> · SPA: <code>{clientHint}</code>
