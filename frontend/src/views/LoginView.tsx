@@ -3,7 +3,7 @@ import { Icon } from '../components/Icon';
 import { SectionCard } from '../components/SectionCard';
 
 export function LoginView() {
-  const loginHeading = 'Đăng nhập Entra ID';
+  const loginHeading = ['Đăng nhập Entra ID'].join('');
 
   return (
     <div className="login-wrap">
