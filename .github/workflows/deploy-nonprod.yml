@@ -56,6 +56,7 @@ jobs:
 
           echo "TARGET_ENV=$target_env" >> "$GITHUB_ENV"
           echo "RESOURCE_GROUP_NAME=rg-internal-support-${target_env}" >> "$GITHUB_ENV"
+          echo "ACR_NAME=support${target_env}01acr" >> "$GITHUB_ENV"
           echo "TFVARS_FILE=envs/${target_env}.tfvars" >> "$GITHUB_ENV"
           echo "BACKEND_KEY=${target_env}.terraform.tfstate" >> "$GITHUB_ENV"
 
