@@ -121,6 +121,34 @@ jobs:
           import_if_needed azurerm_mssql_database.orchestrator "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Sql/servers/support-sql-${env_suffix}/databases/supportpoc_orchestrator"
           import_if_needed azurerm_user_assigned_identity.containerapps "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/support-ca-id-${env_suffix}"
 
+          identity_principal_id=$(az identity show \
+            --name "support-ca-id-${env_suffix}" \
+            --resource-group "$RESOURCE_GROUP_NAME" \
+            --query principalId \
+            -o tsv)
+
+          import_role_assignment_if_needed() {
+            local address="$1"
+            local scope="$2"
+            local role_name="$3"
+            if terraform state list 2>/dev/null | grep -qx "$address"; then
+              return 0
+            fi
+            local assignment_id
+            assignment_id=$(az role assignment list \
+              --assignee "$identity_principal_id" \
+              --scope "$scope" \
+              --role "$role_name" \
+              --query "[0].id" \
+              -o tsv)
+            if [ -n "$assignment_id" ]; then
+              terraform import -var-file="${TFVARS_FILE}" "$address" "$assignment_id" || true
+            fi
+          }
+
+          import_role_assignment_if_needed azurerm_role_assignment.containerapps_acr_pull "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.ContainerRegistry/registries/support${env_suffix}acr" "AcrPull"
+          import_role_assignment_if_needed azurerm_role_assignment.containerapps_sql "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Sql/servers/support-sql-${env_suffix}" "Contributor"
+
       - name: Grant ACR push to pipeline identity
         shell: bash
         run: |
