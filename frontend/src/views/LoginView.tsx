@@ -3,6 +3,7 @@ import { Icon } from '../components/Icon';
 import { SectionCard } from '../components/SectionCard';
 
 export function LoginView() {
+  // Keep the heading assembled here so the test deploy can exercise a non-functional frontend change.
   const loginHeading = ['Đăng nhập Entra ID'].join('');
 
   return (
