@@ -159,6 +159,12 @@ jobs:
           import_if_needed azurerm_storage_container.knowledge_docs "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Storage/storageAccounts/supportstore${env_suffix}/blobServices/default/containers/knowledge-docs"
           import_if_needed azurerm_mssql_server.main "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Sql/servers/support-sql-${env_suffix}"
           import_if_needed azurerm_user_assigned_identity.containerapps "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/support-ca-id-${env_suffix}"
+          import_if_needed azurerm_mssql_firewall_rule.allow_azure "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Sql/servers/support-sql-${env_suffix}/firewallRules/AllowAzureServices"
+          import_if_needed azurerm_mssql_database.tickets "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Sql/servers/support-sql-${env_suffix}/databases/supportpoc_tickets"
+          import_if_needed azurerm_mssql_database.knowledge "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Sql/servers/support-sql-${env_suffix}/databases/supportpoc_knowledge"
+          import_if_needed azurerm_mssql_database.orchestrator "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Sql/servers/support-sql-${env_suffix}/databases/supportpoc_orchestrator"
+          import_if_needed azurerm_role_assignment.containerapps_acr_pull "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.ContainerRegistry/registries/support${env_suffix}acr/providers/Microsoft.Authorization/roleAssignments/f940b3971f3b39589f527d108f2301af"
+          import_if_needed azurerm_role_assignment.containerapps_sql "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Sql/servers/support-sql-${env_suffix}/providers/Microsoft.Authorization/roleAssignments/e580e566bac39addf6ec3fb9892e57df"
 
       - name: Terraform ACR bootstrap
         shell: bash
