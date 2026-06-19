@@ -165,6 +165,11 @@ jobs:
           import_if_needed azurerm_mssql_database.orchestrator "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Sql/servers/support-sql-${env_suffix}/databases/supportpoc_orchestrator"
           import_if_needed azurerm_role_assignment.containerapps_acr_pull "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.ContainerRegistry/registries/support${env_suffix}acr/providers/Microsoft.Authorization/roleAssignments/f940b3971f3b39589f527d108f2301af"
           import_if_needed azurerm_role_assignment.containerapps_sql "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Sql/servers/support-sql-${env_suffix}/providers/Microsoft.Authorization/roleAssignments/e580e566bac39addf6ec3fb9892e57df"
+          import_if_needed azurerm_container_app.ticket_service "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.App/containerApps/support-ticket-${env_suffix}"
+          import_if_needed azurerm_container_app.knowledge_service "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.App/containerApps/support-knowledge-${env_suffix}"
+          import_if_needed azurerm_container_app.ai_orchestrator "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.App/containerApps/support-ai-${env_suffix}"
+          import_if_needed azurerm_container_app.frontend "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.App/containerApps/support-web-${env_suffix}"
+          import_if_needed azurerm_container_app.gateway "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.App/containerApps/support-gateway-${env_suffix}"
 
       - name: Terraform ACR bootstrap
         shell: bash
