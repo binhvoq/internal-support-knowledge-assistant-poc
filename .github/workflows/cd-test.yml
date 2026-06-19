@@ -14,17 +14,86 @@ on:
       - NuGet.config
       - NuGet.Config
 
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  TF_ROOT: infra/terraform
+  TFSTATE_STORAGE: ${{ vars.AZURE_TFSTATE_STORAGE || 'stprojectthem5tfstate' }}
+  TFSTATE_CONTAINER: tfstate
+  ACR_NAME: ${{ vars.AZURE_ACR_NAME || 'supporttf01acr' }}
+  AZURE_LOCATION: ${{ vars.AZURE_LOCATION || 'southeastasia' }}
+  AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
 jobs:
   deploy:
-    uses: ./.github/workflows/deploy-app.yml
-    secrets: inherit
-    with:
-      target_env: test
-      environment_name: test
-      concurrency_name: deploy-test
-      resource_group_name: rg-internal-support-test
-      acr_name: supporttest01acr
-      tfvars_file: envs/test.tfvars
-      backend_key: test.terraform.tfstate
-      base_sha: ${{ github.event.before }}
-      head_sha: ${{ github.sha }}
+    runs-on: ubuntu-latest
+    environment: test
+    concurrency: deploy-test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Resolve target environment
+        shell: bash
+        run: |
+          echo "TARGET_ENV=test" >> "$GITHUB_ENV"
+          echo "RESOURCE_GROUP_NAME=rg-internal-support-test" >> "$GITHUB_ENV"
+          echo "ACR_NAME=supporttest01acr" >> "$GITHUB_ENV"
+          echo "TFVARS_FILE=envs/test.tfvars" >> "$GITHUB_ENV"
+          echo "BACKEND_KEY=test.terraform.tfstate" >> "$GITHUB_ENV"
+
+      - name: Prepare Azure creds
+        id: azure_creds
+        shell: bash
+        run: |
+          set -euo pipefail
+          json=$(cat <<EOF
+          {"clientId":"${{ vars.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ vars.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ vars.AZURE_TENANT_ID }}"}
+          EOF
+          )
+          echo "creds=$json" >> "$GITHUB_OUTPUT"
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ steps.azure_creds.outputs.creds }}
+
+      - name: Terraform init
+        shell: bash
+        working-directory: ${{ env.TF_ROOT }}
+        run: |
+          set -euo pipefail
+          terraform init -reconfigure \
+            -backend-config="storage_account_name=$TFSTATE_STORAGE" \
+            -backend-config="container_name=$TFSTATE_CONTAINER" \
+            -backend-config="key=$BACKEND_KEY" \
+            -backend-config="use_azuread_auth=true"
+
+      - name: Grant ACR push to pipeline identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          acr_scope=$(az acr show --name "$ACR_NAME" --query id -o tsv)
+          az role assignment create \
+            --assignee "${{ vars.AZURE_CLIENT_ID }}" \
+            --assignee-principal-type ServicePrincipal \
+            --role "AcrPush" \
+            --scope "$acr_scope" \
+            -o none || true
+
+      - name: Deploy app changes
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python scripts/deploy_app.py
