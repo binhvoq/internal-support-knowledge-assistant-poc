@@ -44,7 +44,6 @@ jobs:
           echo "ACR_NAME=support${target_env}01acr" >> "$GITHUB_ENV"
           echo "TFVARS_FILE=envs/${target_env}.tfvars" >> "$GITHUB_ENV"
           echo "BACKEND_KEY=${target_env}.terraform.tfstate" >> "$GITHUB_ENV"
-          echo "IMAGE_TAG=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
 
       - name: Prepare Azure creds
         id: azure_creds
@@ -189,66 +188,6 @@ jobs:
             --scope "$acr_scope" \
             -o none || true
 
-      - name: Build and push images
-        shell: bash
-        run: |
-          set -euo pipefail
-          for spec in \
-            "frontend:docker/Dockerfile.frontend" \
-            "gateway:docker/Dockerfile.gateway" \
-            "ticket-service:docker/Dockerfile.ticket-service" \
-            "knowledge-service:docker/Dockerfile.knowledge-service" \
-            "ai-orchestrator:docker/Dockerfile.ai-orchestrator"
-          do
-            repo="${spec%%:*}"
-            file="${spec#*:}"
-            az acr build \
-              --registry "$ACR_NAME" \
-              --image "${repo}:${IMAGE_TAG}" \
-              --file "$file" \
-              .
-          done
-
-      - name: Write Terraform image digests
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import json
-          import os
-          import subprocess
-          from pathlib import Path
-
-          acr = os.environ["ACR_NAME"]
-          tag = os.environ["IMAGE_TAG"]
-          tf_root = Path(os.environ["TF_ROOT"])
-
-          repos = [
-              "frontend",
-              "gateway",
-              "ticket-service",
-              "knowledge-service",
-              "ai-orchestrator",
-          ]
-
-          payload = {}
-          for repo in repos:
-              raw = subprocess.check_output([
-                  "az", "acr", "repository", "show-manifests",
-                  "--name", acr,
-                  "--repository", repo,
-                  "--query", f"[?tags && contains(tags, '{tag}')].digest | [0]",
-                  "-o", "tsv",
-              ], text=True).strip()
-              if not raw:
-                  raise SystemExit(f"missing digest for {repo}:{tag}")
-              payload[f"{repo.replace('-', '_')}_image_digest"] = raw
-
-          out_path = tf_root / "generated.auto.tfvars.json"
-          out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-          print(f"wrote {out_path}")
-          PY
-
       - name: Terraform full apply
         shell: bash
         working-directory: ${{ env.TF_ROOT }}
@@ -256,5 +195,4 @@ jobs:
           set -euo pipefail
           terraform apply \
             -auto-approve \
-            -var-file="${TFVARS_FILE}" \
-            -var-file=generated.auto.tfvars.json
+            -var-file="${TFVARS_FILE}"

@@ -157,6 +157,41 @@ def import_role_assignment_if_needed(tf_root: Path, tfvars_file: str, address: s
         run(["terraform", "import", "-var-file", tfvars_file, address, assignment_id], cwd=tf_root, check=False)
 
 
+def require_resource(resource_id: str, label: str) -> None:
+    probe = run(["az", "resource", "show", "--ids", resource_id], check=False, capture=True)
+    if probe.returncode != 0:
+        raise SystemExit(f"Required infrastructure missing: {label}. Run infra.yml first.")
+
+
+def require_resource_group(resource_group_name: str) -> None:
+    probe = run(["az", "group", "show", "--name", resource_group_name], check=False, capture=True)
+    if probe.returncode != 0:
+        raise SystemExit(f"Required infrastructure missing: resource group {resource_group_name}. Run infra.yml first.")
+
+
+def require_role_assignment(scope: str, role_name: str, assignee: str, label: str) -> None:
+    probe = run([
+        "az", "role", "assignment", "list",
+        "--assignee", assignee,
+        "--scope", scope,
+        "--role", role_name,
+        "--query", "[0].id",
+        "-o", "tsv",
+    ], check=False, capture=True)
+    if not probe.stdout.strip():
+        raise SystemExit(f"Required infrastructure missing: {label}. Run infra.yml first.")
+
+
+def terraform_init(tf_root: Path, env: dict[str, str]) -> None:
+    run([
+        "terraform", "init", "-reconfigure",
+        "-backend-config", f"storage_account_name={env['TFSTATE_STORAGE']}",
+        "-backend-config", f"container_name={env['TFSTATE_CONTAINER']}",
+        "-backend-config", f"key={env['BACKEND_KEY']}",
+        "-backend-config", "use_azuread_auth=true",
+    ], cwd=tf_root, check=True)
+
+
 def repo_to_container_app_name(repo: str, env_suffix: str) -> str:
     if repo == "frontend":
         return f"support-web-{env_suffix}"
@@ -229,7 +264,11 @@ def main() -> int:
         "RESOURCE_GROUP_NAME",
         "TFVARS_FILE",
         "TF_ROOT",
+        "TFSTATE_STORAGE",
+        "TFSTATE_CONTAINER",
+        "BACKEND_KEY",
         "ACR_NAME",
+        "AZURE_CLIENT_ID",
         "AZURE_SUBSCRIPTION_ID",
     ]}
     missing = [k for k, v in env.items() if not v]
@@ -238,6 +277,7 @@ def main() -> int:
 
     tf_root = Path(env["TF_ROOT"])
     env_suffix = f"{env['TARGET_ENV']}01"
+    terraform_init(tf_root, env)
     changed_files = git_changed_files(env["BASE_SHA"], env["HEAD_SHA"])
     repos = detect_repos(changed_files)
 
@@ -253,6 +293,55 @@ def main() -> int:
         "--query", "principalId",
         "-o", "tsv",
     ], check=True, capture=True).stdout.strip()
+
+    require_resource_group(env["RESOURCE_GROUP_NAME"])
+
+    required_resources = [
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.ContainerRegistry/registries/{env['ACR_NAME']}",
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.App/managedEnvironments/support-cae-{env_suffix}",
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/support-ca-id-{env_suffix}",
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.Storage/storageAccounts/supportstore{env_suffix}",
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.ServiceBus/namespaces/support-bus-{env_suffix}",
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.Search/searchServices/support-search-{env_suffix}",
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.OperationalInsights/workspaces/support-logs-{env_suffix}",
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.OperationalInsights/workspaces/support-ca-logs-{env_suffix}",
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.Insights/components/support-insights-{env_suffix}",
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.CognitiveServices/accounts/support-oai-chat-{env_suffix}",
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.CognitiveServices/accounts/support-oai-embed-{env_suffix}",
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.CognitiveServices/accounts/support-oai-chat-{env_suffix}/deployments/gpt-4.1-mini",
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.CognitiveServices/accounts/support-oai-embed-{env_suffix}/deployments/text-embedding-3-small",
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.Sql/servers/support-sql-{env_suffix}",
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.Sql/servers/support-sql-{env_suffix}/firewallRules/AllowAzureServices",
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.Sql/servers/support-sql-{env_suffix}/databases/supportpoc_tickets",
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.Sql/servers/support-sql-{env_suffix}/databases/supportpoc_knowledge",
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.Sql/servers/support-sql-{env_suffix}/databases/supportpoc_orchestrator",
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.App/containerApps/support-web-{env_suffix}",
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.App/containerApps/support-gateway-{env_suffix}",
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.App/containerApps/support-ticket-{env_suffix}",
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.App/containerApps/support-knowledge-{env_suffix}",
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.App/containerApps/support-ai-{env_suffix}",
+    ]
+    for resource_id in required_resources:
+        require_resource(resource_id, resource_id.rsplit("/", 1)[-1])
+
+    require_role_assignment(
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.ContainerRegistry/registries/{env['ACR_NAME']}",
+        "AcrPull",
+        identity_principal_id,
+        "Container apps ACR pull role assignment",
+    )
+    require_role_assignment(
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.Sql/servers/support-sql-{env_suffix}",
+        "Contributor",
+        identity_principal_id,
+        "Container apps SQL role assignment",
+    )
+    require_role_assignment(
+        f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.ContainerRegistry/registries/{env['ACR_NAME']}",
+        "AcrPush",
+        env["AZURE_CLIENT_ID"],
+        "CD pipeline ACR push role assignment",
+    )
 
     import_if_needed(tf_root, env["TFVARS_FILE"], "azurerm_resource_group.main", f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}")
     import_if_needed(tf_root, env["TFVARS_FILE"], "azurerm_container_registry.main", f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.ContainerRegistry/registries/{env['ACR_NAME']}")
