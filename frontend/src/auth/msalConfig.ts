@@ -2,6 +2,7 @@ import { type Configuration, LogLevel } from '@azure/msal-browser';
 
 const runtimeConfig = typeof window !== 'undefined' ? window.__APP_CONFIG__ : undefined;
 const clientId = runtimeConfig?.VITE_AAD_CLIENT_ID ?? import.meta.env.VITE_AAD_CLIENT_ID ?? '';
+const cacheLocation = runtimeConfig?.VITE_AAD_CACHE_LOCATION ?? import.meta.env.VITE_AAD_CACHE_LOCATION ?? 'localStorage';
 const authority =
   runtimeConfig?.VITE_AAD_AUTHORITY ??
   import.meta.env.VITE_AAD_AUTHORITY ??
@@ -24,7 +25,7 @@ export const msalConfig: Configuration = {
       typeof window !== 'undefined' ? window.location.origin + '/' : 'http://localhost:5173/',
   },
   cache: {
-    cacheLocation: 'sessionStorage',
+    cacheLocation,
   },
   system: {
     loggerOptions: {

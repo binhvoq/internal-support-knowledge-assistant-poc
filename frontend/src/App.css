@@ -526,7 +526,7 @@ textarea:focus {
 
 .mine-row {
   display: grid;
-  grid-template-columns: 150px 130px 90px 1fr 190px 20px;
+  grid-template-columns: minmax(220px, 1.25fr) max-content 90px minmax(0, 1.5fr) 190px 20px;
   align-items: center;
   gap: 12px;
   min-height: 54px;
@@ -535,6 +535,16 @@ textarea:focus {
   border: 1px solid var(--soft-border);
   border-radius: 8px;
   box-shadow: 0 5px 16px rgba(39, 55, 93, 0.08);
+}
+
+.mine-row strong {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  padding-right: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .link-text,

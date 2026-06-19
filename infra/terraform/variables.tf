@@ -133,26 +133,86 @@ variable "sql_database_sku" {
 variable "frontend_image_digest" {
   type        = string
   description = "Immutable digest for the frontend image."
+  default     = null
+  nullable    = true
+  validation {
+    condition = (
+      var.frontend_image_digest == null
+      || (
+        can(regex("^sha256:[0-9a-f]{64}$", var.frontend_image_digest))
+        && !can(regex("^sha256:0{64}$", var.frontend_image_digest))
+      )
+    )
+    error_message = "frontend_image_digest phai la sha256 digest hop le hoac null khi bootstrap."
+  }
 }
 
 variable "gateway_image_digest" {
   type        = string
   description = "Immutable digest for the gateway image."
+  default     = null
+  nullable    = true
+  validation {
+    condition = (
+      var.gateway_image_digest == null
+      || (
+        can(regex("^sha256:[0-9a-f]{64}$", var.gateway_image_digest))
+        && !can(regex("^sha256:0{64}$", var.gateway_image_digest))
+      )
+    )
+    error_message = "gateway_image_digest phai la sha256 digest hop le hoac null khi bootstrap."
+  }
 }
 
 variable "ticket_service_image_digest" {
   type        = string
   description = "Immutable digest for the ticket service image."
+  default     = null
+  nullable    = true
+  validation {
+    condition = (
+      var.ticket_service_image_digest == null
+      || (
+        can(regex("^sha256:[0-9a-f]{64}$", var.ticket_service_image_digest))
+        && !can(regex("^sha256:0{64}$", var.ticket_service_image_digest))
+      )
+    )
+    error_message = "ticket_service_image_digest phai la sha256 digest hop le hoac null khi bootstrap."
+  }
 }
 
 variable "knowledge_service_image_digest" {
   type        = string
   description = "Immutable digest for the knowledge service image."
+  default     = null
+  nullable    = true
+  validation {
+    condition = (
+      var.knowledge_service_image_digest == null
+      || (
+        can(regex("^sha256:[0-9a-f]{64}$", var.knowledge_service_image_digest))
+        && !can(regex("^sha256:0{64}$", var.knowledge_service_image_digest))
+      )
+    )
+    error_message = "knowledge_service_image_digest phai la sha256 digest hop le hoac null khi bootstrap."
+  }
 }
 
 variable "ai_orchestrator_image_digest" {
   type        = string
   description = "Immutable digest for the AI orchestrator image."
+  default     = null
+  nullable    = true
+  validation {
+    condition = (
+      var.ai_orchestrator_image_digest == null
+      || (
+        can(regex("^sha256:[0-9a-f]{64}$", var.ai_orchestrator_image_digest))
+        && !can(regex("^sha256:0{64}$", var.ai_orchestrator_image_digest))
+      )
+    )
+    error_message = "ai_orchestrator_image_digest phai la sha256 digest hop le hoac null khi bootstrap."
+  }
 }
 
 variable "write_local_config" {

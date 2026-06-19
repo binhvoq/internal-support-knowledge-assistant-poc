@@ -306,6 +306,12 @@ resource "azurerm_role_assignment" "containerapps_sql" {
   principal_id         = azurerm_user_assigned_identity.containerapps.principal_id
 }
 
+resource "azurerm_role_assignment" "containerapps_storage_blob" {
+  scope                = azurerm_storage_account.docs.id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = azurerm_user_assigned_identity.containerapps.principal_id
+}
+
 resource "azurerm_container_app" "ticket_service" {
   name                         = local.ticket_service_name
   resource_group_name          = azurerm_resource_group.main.name
@@ -334,7 +340,7 @@ resource "azurerm_container_app" "ticket_service" {
     max_replicas = 1
     container {
       name   = "ticket-service"
-      image  = "${azurerm_container_registry.main.login_server}/ticket-service@${var.ticket_service_image_digest}"
+      image  = "${azurerm_container_registry.main.login_server}/ticket-service@${coalesce(var.ticket_service_image_digest, "sha256:0000000000000000000000000000000000000000000000000000000000000000")}"
       cpu    = 0.5
       memory = "1Gi"
       env {
@@ -421,7 +427,7 @@ resource "azurerm_container_app" "knowledge_service" {
     max_replicas = 1
     container {
       name   = "knowledge-service"
-      image  = "${azurerm_container_registry.main.login_server}/knowledge-service@${var.knowledge_service_image_digest}"
+      image  = "${azurerm_container_registry.main.login_server}/knowledge-service@${coalesce(var.knowledge_service_image_digest, "sha256:0000000000000000000000000000000000000000000000000000000000000000")}"
       cpu    = 0.5
       memory = "1Gi"
       env {
@@ -528,7 +534,7 @@ resource "azurerm_container_app" "ai_orchestrator" {
     max_replicas = 1
     container {
       name   = "ai-orchestrator"
-      image  = "${azurerm_container_registry.main.login_server}/ai-orchestrator@${var.ai_orchestrator_image_digest}"
+      image  = "${azurerm_container_registry.main.login_server}/ai-orchestrator@${coalesce(var.ai_orchestrator_image_digest, "sha256:0000000000000000000000000000000000000000000000000000000000000000")}"
       cpu    = 0.5
       memory = "1Gi"
       env {
@@ -647,7 +653,7 @@ resource "azurerm_container_app" "frontend" {
     max_replicas = 1
     container {
       name   = "frontend"
-      image  = "${azurerm_container_registry.main.login_server}/frontend@${var.frontend_image_digest}"
+      image  = "${azurerm_container_registry.main.login_server}/frontend@${coalesce(var.frontend_image_digest, "sha256:0000000000000000000000000000000000000000000000000000000000000000")}"
       cpu    = 0.25
       memory = "0.5Gi"
       env {
@@ -665,6 +671,10 @@ resource "azurerm_container_app" "frontend" {
       env {
         name  = "VITE_AAD_API_SCOPE"
         value = local.entra_enabled ? local.entra_config.api.scopeFull : ""
+      }
+      env {
+        name  = "VITE_AAD_CACHE_LOCATION"
+        value = "localStorage"
       }
     }
   }
@@ -710,7 +720,7 @@ resource "azurerm_container_app" "gateway" {
     max_replicas = 1
     container {
       name   = "gateway"
-      image  = "${azurerm_container_registry.main.login_server}/gateway@${var.gateway_image_digest}"
+      image  = "${azurerm_container_registry.main.login_server}/gateway@${coalesce(var.gateway_image_digest, "sha256:0000000000000000000000000000000000000000000000000000000000000000")}"
       cpu    = 0.25
       memory = "0.5Gi"
       env {

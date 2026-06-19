@@ -27,8 +27,8 @@ tags = {
   environment = "test"
 }
 
-frontend_image_digest          = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-gateway_image_digest           = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-ticket_service_image_digest    = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-knowledge_service_image_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-ai_orchestrator_image_digest   = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+frontend_image_digest          = null
+gateway_image_digest           = null
+ticket_service_image_digest    = null
+knowledge_service_image_digest = null
+ai_orchestrator_image_digest   = null

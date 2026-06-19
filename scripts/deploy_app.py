@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import sys
 import subprocess
 from pathlib import Path
 
 
 REPOS = ("frontend", "gateway", "ticket-service", "knowledge-service", "ai-orchestrator")
+PLACEHOLDER_DIGEST = "sha256:" + "0" * 64
 
 SERVICE_RULES = {
     "frontend": {
@@ -84,10 +87,19 @@ def run(
     check: bool = True,
     capture: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    kwargs = {"cwd": cwd, "text": True, "check": check}
+    env = os.environ.copy()
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("AZURE_CORE_NO_COLOR", "1")
+    env.setdefault("NO_COLOR", "1")
+    kwargs = {"cwd": cwd, "text": True, "check": check, "env": env}
     if capture:
         kwargs["capture_output"] = True
     return subprocess.run(cmd, **kwargs)
+
+
+def az_cmd() -> str:
+    return "az.cmd" if sys.platform.startswith("win") else "az"
 
 
 def git_changed_files(base_sha: str, head_sha: str) -> list[str]:
@@ -136,7 +148,7 @@ def terraform_state_list(tf_root: Path) -> set[str]:
 def import_if_needed(tf_root: Path, tfvars_file: str, address: str, resource_id: str) -> None:
     if address in terraform_state_list(tf_root):
         return
-    probe = run(["az", "resource", "show", "--ids", resource_id], check=False, capture=True)
+    probe = run([az_cmd(), "resource", "show", "--ids", resource_id], check=False, capture=True)
     if probe.returncode == 0:
         run(["terraform", "import", "-var-file", tfvars_file, address, resource_id], cwd=tf_root, check=False)
 
@@ -145,7 +157,7 @@ def import_role_assignment_if_needed(tf_root: Path, tfvars_file: str, address: s
     if address in terraform_state_list(tf_root):
         return
     probe = run([
-        "az", "role", "assignment", "list",
+        az_cmd(), "role", "assignment", "list",
         "--assignee", assignee,
         "--scope", scope,
         "--role", role_name,
@@ -186,7 +198,7 @@ def build_image(acr_name: str, repo: str, image_tag: str) -> str:
 
     print(f"Building {repo}:{image_tag}")
     run([
-        "az", "acr", "build",
+        az_cmd(), "acr", "build",
         "--registry", acr_name,
         "--image", f"{repo}:{image_tag}",
         "--file", dockerfile,
@@ -194,7 +206,7 @@ def build_image(acr_name: str, repo: str, image_tag: str) -> str:
     ], check=True)
 
     manifest = run([
-        "az", "acr", "repository", "show-manifests",
+        az_cmd(), "acr", "repository", "show-manifests",
         "--name", acr_name,
         "--repository", repo,
         "--query", f"[?tags && contains(tags, '{image_tag}')].digest | [0]",
@@ -209,7 +221,7 @@ def build_image(acr_name: str, repo: str, image_tag: str) -> str:
 def current_digest(resource_group_name: str, repo: str, env_suffix: str) -> str:
     app_name = repo_to_container_app_name(repo, env_suffix)
     result = run([
-        "az", "containerapp", "show",
+        az_cmd(), "containerapp", "show",
         "-g", resource_group_name,
         "-n", app_name,
         "--query", "properties.template.containers[0].image",
@@ -219,6 +231,36 @@ def current_digest(resource_group_name: str, repo: str, env_suffix: str) -> str:
     if "@" not in image_ref:
         raise RuntimeError(f"Unexpected image reference for {app_name}: {image_ref}")
     return image_ref.split("@", 1)[1]
+
+
+def current_container_env_value(resource_group_name: str, app_name: str, env_name: str) -> str:
+    result = run([
+        az_cmd(), "containerapp", "show",
+        "-g", resource_group_name,
+        "-n", app_name,
+        "--query", f"properties.template.containers[0].env[?name=='{env_name}'].value | [0]",
+        "-o", "tsv",
+    ], check=True, capture=True)
+    return result.stdout.strip()
+
+
+def service_name(repo: str, env_suffix: str) -> str:
+    return repo_to_container_app_name(repo, env_suffix)
+
+
+def is_valid_digest(digest: str) -> bool:
+    return bool(re.fullmatch(r"sha256:[0-9a-f]{64}", digest)) and digest != PLACEHOLDER_DIGEST
+
+
+def container_app_exists(resource_group_name: str, app_name: str) -> bool:
+    result = run([
+        az_cmd(), "containerapp", "show",
+        "-g", resource_group_name,
+        "-n", app_name,
+        "--query", "name",
+        "-o", "tsv",
+    ], check=False, capture=True)
+    return result.returncode == 0 and bool(result.stdout.strip())
 
 
 def main() -> int:
@@ -240,14 +282,30 @@ def main() -> int:
     env_suffix = f"{env['TARGET_ENV']}01"
     changed_files = git_changed_files(env["BASE_SHA"], env["HEAD_SHA"])
     repos = detect_repos(changed_files)
+    force_all = os.environ.get("FORCE_DEPLOY_ALL", "").strip().lower() in {"1", "true", "yes"}
 
-    if not repos:
-        print("No app changes detected; skipping deploy.")
-        return 0
+    if force_all:
+        print("FORCE_DEPLOY_ALL enabled; deploying all services.")
+        repos = set(REPOS)
+    elif not repos:
+        missing_apps = [
+            repo
+            for repo in REPOS
+            if not container_app_exists(env["RESOURCE_GROUP_NAME"], service_name(repo, env_suffix))
+        ]
+        if missing_apps:
+            print(
+                "No app changes detected, but some container apps are missing; "
+                f"forcing deploy of: {', '.join(missing_apps)}"
+            )
+            repos = set(REPOS)
+        else:
+            print("No app changes detected and all container apps exist; skipping deploy.")
+            return 0
 
     # Ensure the current infra state is known for app-only deploys.
     identity_principal_id = run([
-        "az", "identity", "show",
+        az_cmd(), "identity", "show",
         "--name", f"support-ca-id-{env_suffix}",
         "--resource-group", env["RESOURCE_GROUP_NAME"],
         "--query", "principalId",
@@ -308,13 +366,31 @@ def main() -> int:
             f"/subscriptions/{env['AZURE_SUBSCRIPTION_ID']}/resourceGroups/{env['RESOURCE_GROUP_NAME']}/providers/Microsoft.App/containerApps/{repo_to_container_app_name(repo, env_suffix)}",
         )
 
+    expected_api_scope = current_container_env_value(env["RESOURCE_GROUP_NAME"], service_name("ticket-service", env_suffix), "AzureAd__Scope")
+    frontend_scope = current_container_env_value(env["RESOURCE_GROUP_NAME"], service_name("frontend", env_suffix), "VITE_AAD_API_SCOPE")
+    if frontend_scope != expected_api_scope:
+        print(
+            "Frontend auth scope mismatch detected; forcing frontend deploy "
+            f"(frontend={frontend_scope or '<empty>'} ticket-service={expected_api_scope or '<empty>'})."
+        )
+        repos.add("frontend")
+
     build_digests: dict[str, str] = {}
     for repo in repos:
-        build_digests[repo] = build_image(env["ACR_NAME"], repo, env["HEAD_SHA"][:7])
+        digest = build_image(env["ACR_NAME"], repo, env["HEAD_SHA"][:7])
+        if not is_valid_digest(digest):
+            raise RuntimeError(f"Invalid digest produced for {repo}: {digest}")
+        build_digests[repo] = digest
 
     for repo in REPOS:
         if repo not in build_digests:
-            build_digests[repo] = current_digest(env["RESOURCE_GROUP_NAME"], repo, env_suffix)
+            digest = current_digest(env["RESOURCE_GROUP_NAME"], repo, env_suffix)
+            if not is_valid_digest(digest):
+                raise RuntimeError(
+                    f"Invalid existing digest for {repo}: {digest}. "
+                    "Build the image first, then rerun deploy."
+                )
+            build_digests[repo] = digest
 
     payload = {f"{repo.replace('-', '_')}_image_digest": digest for repo, digest in build_digests.items()}
     out_path = tf_root / "generated.auto.tfvars.json"
@@ -333,6 +409,15 @@ def main() -> int:
 
     print(f"Applying targets: {', '.join(target_resources)}")
     run(cmd, cwd=tf_root, check=True)
+
+    if "frontend" in repos:
+        refreshed_frontend_scope = current_container_env_value(env["RESOURCE_GROUP_NAME"], service_name("frontend", env_suffix), "VITE_AAD_API_SCOPE")
+        refreshed_ticket_scope = current_container_env_value(env["RESOURCE_GROUP_NAME"], service_name("ticket-service", env_suffix), "AzureAd__Scope")
+        if refreshed_frontend_scope != refreshed_ticket_scope:
+            raise RuntimeError(
+                "Frontend auth scope still mismatched after deploy: "
+                f"frontend={refreshed_frontend_scope or '<empty>'} ticket-service={refreshed_ticket_scope or '<empty>'}"
+            )
     return 0
 
 

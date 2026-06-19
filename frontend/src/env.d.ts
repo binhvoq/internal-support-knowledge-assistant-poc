@@ -4,5 +4,6 @@ interface Window {
     VITE_AAD_AUTHORITY?: string;
     VITE_AAD_CLIENT_ID?: string;
     VITE_AAD_API_SCOPE?: string;
+    VITE_AAD_CACHE_LOCATION?: string;
   };
 }

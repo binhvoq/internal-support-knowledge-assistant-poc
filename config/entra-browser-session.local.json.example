@@ -2,7 +2,7 @@
   "_handoff": {
     "purpose": "Mau handoff — copy thanh entra-browser-session.local.json sau khi user login (gitignored). KHONG commit file that.",
     "frontendUrl": "http://localhost:5173/",
-    "whyNoReloginOnRefresh": "MSAL cache trong sessionStorage (msal.*) + refresh token.",
+    "whyNoReloginOnRefresh": "MSAL cache trong localStorage (msal.*) + refresh token.",
     "nextStepsForAi": [
       "Doc ky thuat: docs/technical_learn.md",
       "Restart backend services directly with dotnet run (Ticket 5001, Knowledge 5002, AI 5003)",
