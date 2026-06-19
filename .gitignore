@@ -28,3 +28,7 @@ src/**/appsettings.Development.json
 .DS_Store
 .terraform/
 *.tfstate*
+infra/terraform/generated.auto.tfvars.json
+infra/terraform/backend.hcl
+frontend/test-results/
+**/__pycache__/

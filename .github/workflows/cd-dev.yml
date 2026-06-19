@@ -29,7 +29,6 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: dev
     concurrency: deploy-dev
 
     steps:

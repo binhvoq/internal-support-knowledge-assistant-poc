@@ -1,4 +1,9 @@
-# Keep workflow and infra changes under explicit review.
+# Default owner for every path — PRs from other contributors need @binhvoq.
+* @binhvoq
+
+# Explicit high-risk areas (same owner; listed for clarity).
 /.github/workflows/ @binhvoq
 /infra/terraform/ @binhvoq
+/config/cicd-governance.json @binhvoq
+/scripts/check_cicd_governance.py @binhvoq
 /docs/ @binhvoq

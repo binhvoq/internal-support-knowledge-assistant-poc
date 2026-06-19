@@ -22,7 +22,17 @@ env:
   AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
 jobs:
+  authorize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Require privileged actor for Infra
+        run: python scripts/check_cicd_governance.py authorize-pipeline --actor "${{ github.actor }}"
+
   deploy:
+    needs: authorize
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     concurrency: infra-${{ inputs.environment }}

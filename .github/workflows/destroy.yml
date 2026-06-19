@@ -1,18 +1,16 @@
-name: CD Prod
+name: Destroy
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - frontend/**
-      - src/**
-      - docker/**
-      - "*.sln"
-      - Directory.Build.*
-      - global.json
-      - NuGet.config
-      - NuGet.Config
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment to destroy
+        required: true
+        type: environment
+      confirm:
+        description: Type the environment name again to confirm destroy
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -22,20 +20,38 @@ env:
   TF_ROOT: infra/terraform
   TFSTATE_STORAGE: ${{ vars.AZURE_TFSTATE_STORAGE || 'stprojectthem5tfstate' }}
   TFSTATE_CONTAINER: tfstate
-  ACR_NAME: ${{ vars.AZURE_ACR_NAME || 'supporttf01acr' }}
-  AZURE_LOCATION: ${{ vars.AZURE_LOCATION || 'southeastasia' }}
   AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
 jobs:
-  deploy:
+  authorize:
     runs-on: ubuntu-latest
-    concurrency: deploy-prod
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+
+      - name: Require privileged actor for Destroy
+        run: python scripts/check_cicd_governance.py authorize-pipeline --actor "${{ github.actor }}"
+
+  destroy:
+    needs: authorize
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    concurrency: destroy-${{ inputs.environment }}
+
+    steps:
+      - name: Confirm destroy target
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${{ inputs.environment }}"
+          confirm="${{ inputs.confirm }}"
+          if [ "$confirm" != "$target" ]; then
+            echo "Confirmation mismatch: expected '$target', got '$confirm'."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -43,11 +59,10 @@ jobs:
       - name: Resolve target environment
         shell: bash
         run: |
-          echo "TARGET_ENV=prod" >> "$GITHUB_ENV"
-          echo "RESOURCE_GROUP_NAME=rg-internal-support-prod" >> "$GITHUB_ENV"
-          echo "ACR_NAME=supportprod01acr" >> "$GITHUB_ENV"
-          echo "TFVARS_FILE=envs/prod.tfvars" >> "$GITHUB_ENV"
-          echo "BACKEND_KEY=prod.terraform.tfstate" >> "$GITHUB_ENV"
+          target_env="${{ inputs.environment }}"
+          echo "TARGET_ENV=$target_env" >> "$GITHUB_ENV"
+          echo "TFVARS_FILE=envs/${target_env}.tfvars" >> "$GITHUB_ENV"
+          echo "BACKEND_KEY=${target_env}.terraform.tfstate" >> "$GITHUB_ENV"
 
       - name: Prepare Azure creds
         id: azure_creds
@@ -76,23 +91,11 @@ jobs:
             -backend-config="key=$BACKEND_KEY" \
             -backend-config="use_azuread_auth=true"
 
-      - name: Grant ACR push to pipeline identity
+      - name: Terraform destroy
         shell: bash
+        working-directory: ${{ env.TF_ROOT }}
         run: |
           set -euo pipefail
-          acr_scope=$(az acr show --name "$ACR_NAME" --query id -o tsv)
-          az role assignment create \
-            --assignee "${{ vars.AZURE_CLIENT_ID }}" \
-            --assignee-principal-type ServicePrincipal \
-            --role "AcrPush" \
-            --scope "$acr_scope" \
-            -o none || true
-
-      - name: Deploy app changes
-        shell: bash
-        env:
-          BASE_SHA: ${{ github.event.before }}
-          HEAD_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          python scripts/deploy_app.py
+          terraform destroy \
+            -auto-approve \
+            -var-file="${TFVARS_FILE}"
