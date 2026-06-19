@@ -1,0 +1,30 @@
+name: CD Test
+
+on:
+  push:
+    branches:
+      - test
+    paths:
+      - frontend/**
+      - src/**
+      - docker/**
+      - "*.sln"
+      - Directory.Build.*
+      - global.json
+      - NuGet.config
+      - NuGet.Config
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/deploy-app.yml
+    secrets: inherit
+    with:
+      target_env: test
+      environment_name: test
+      concurrency_name: deploy-test
+      resource_group_name: rg-internal-support-test
+      acr_name: supporttest01acr
+      tfvars_file: envs/test.tfvars
+      backend_key: test.terraform.tfstate
+      base_sha: ${{ github.event.before }}
+      head_sha: ${{ github.sha }}

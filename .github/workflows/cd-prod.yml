@@ -1,0 +1,30 @@
+name: CD Prod
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - frontend/**
+      - src/**
+      - docker/**
+      - "*.sln"
+      - Directory.Build.*
+      - global.json
+      - NuGet.config
+      - NuGet.Config
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/deploy-app.yml
+    secrets: inherit
+    with:
+      target_env: prod
+      environment_name: prod
+      concurrency_name: deploy-prod
+      resource_group_name: rg-internal-support-prod
+      acr_name: supportprod01acr
+      tfvars_file: envs/prod.tfvars
+      backend_key: prod.terraform.tfstate
+      base_sha: ${{ github.event.before }}
+      head_sha: ${{ github.sha }}

@@ -1,0 +1,30 @@
+name: CD Dev
+
+on:
+  push:
+    branches:
+      - dev
+    paths:
+      - frontend/**
+      - src/**
+      - docker/**
+      - "*.sln"
+      - Directory.Build.*
+      - global.json
+      - NuGet.config
+      - NuGet.Config
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/deploy-app.yml
+    secrets: inherit
+    with:
+      target_env: dev
+      environment_name: dev
+      concurrency_name: deploy-dev
+      resource_group_name: rg-internal-support-dev
+      acr_name: supportdev01acr
+      tfvars_file: envs/dev.tfvars
+      backend_key: dev.terraform.tfstate
+      base_sha: ${{ github.event.before }}
+      head_sha: ${{ github.sha }}
