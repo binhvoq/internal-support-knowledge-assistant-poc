@@ -156,6 +156,9 @@ jobs:
           import_if_needed azurerm_cognitive_deployment.chat "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.CognitiveServices/accounts/support-oai-chat-${env_suffix}/deployments/gpt-4.1-mini"
           import_if_needed azurerm_cognitive_deployment.embedding "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.CognitiveServices/accounts/support-oai-embed-${env_suffix}/deployments/text-embedding-3-small"
           import_if_needed azurerm_container_app_environment.main "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.App/managedEnvironments/support-cae-${env_suffix}"
+          import_if_needed azurerm_storage_container.knowledge_docs "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Storage/storageAccounts/supportstore${env_suffix}/blobServices/default/containers/knowledge-docs"
+          import_if_needed azurerm_mssql_server.main "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.Sql/servers/support-sql-${env_suffix}"
+          import_if_needed azurerm_user_assigned_identity.containerapps "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/support-ca-id-${env_suffix}"
 
       - name: Terraform ACR bootstrap
         shell: bash
