@@ -21,5 +21,5 @@ export const viewIcons: Record<View, string> = {
   chat: 'sparkles',
 };
 
-// Keep nav order stable for UI layout and route grouping.
+// Keep nav order stable for layout and route grouping.
 export const navItems: View[] = ['auth', 'employee', 'queue', 'detail', 'knowledge', 'chat'];
